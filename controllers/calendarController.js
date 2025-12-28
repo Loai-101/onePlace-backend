@@ -100,19 +100,50 @@ const getCalendarEvent = async (req, res) => {
     }
 
     // Check company access
-    if (event.company && event.company.toString() !== req.user.company?.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to access this event'
-      });
+    if (event.company) {
+      let companyId;
+      if (typeof event.company === 'object' && event.company._id) {
+        companyId = event.company._id.toString();
+      } else {
+        companyId = event.company.toString();
+      }
+      
+      const userCompanyId = req.user.company?.toString();
+      if (companyId !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to access this event'
+        });
+      }
     }
 
-    // Check permissions
-    if (req.user.role === 'salesman' && event.createdBy._id.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to access this event'
-      });
+    // Check permissions for salesmen - they can only access their own events
+    if (req.user.role === 'salesman') {
+      // Handle both populated and non-populated createdBy
+      let createdById;
+      if (event.createdBy) {
+        if (typeof event.createdBy === 'object' && event.createdBy._id) {
+          createdById = event.createdBy._id.toString();
+        } else {
+          createdById = event.createdBy.toString();
+        }
+      }
+      
+      const userId = req.user._id.toString();
+      
+      if (!createdById || createdById !== userId) {
+        console.log('Access denied for salesman:', {
+          eventId: event._id,
+          createdById,
+          userId,
+          createdByType: typeof event.createdBy,
+          createdByValue: event.createdBy
+        });
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to access this event'
+        });
+      }
     }
 
     res.status(200).json({
@@ -246,19 +277,43 @@ const updateCalendarEvent = async (req, res) => {
     }
 
     // Check company access
-    if (event.company && event.company.toString() !== req.user.company?.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to update this event'
-      });
+    if (event.company) {
+      let companyId;
+      if (typeof event.company === 'object' && event.company._id) {
+        companyId = event.company._id.toString();
+      } else {
+        companyId = event.company.toString();
+      }
+      
+      const userCompanyId = req.user.company?.toString();
+      if (companyId !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to update this event'
+        });
+      }
     }
 
-    // Check permissions
-    if (req.user.role === 'salesman' && event.createdBy.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to update this event'
-      });
+    // Check permissions for salesmen - they can only update their own events
+    if (req.user.role === 'salesman') {
+      // Handle both populated and non-populated createdBy
+      let createdById;
+      if (event.createdBy) {
+        if (typeof event.createdBy === 'object' && event.createdBy._id) {
+          createdById = event.createdBy._id.toString();
+        } else {
+          createdById = event.createdBy.toString();
+        }
+      }
+      
+      const userId = req.user._id.toString();
+      
+      if (!createdById || createdById !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to update this event'
+        });
+      }
     }
 
     const {
@@ -363,19 +418,43 @@ const deleteCalendarEvent = async (req, res) => {
     }
 
     // Check company access
-    if (event.company && event.company.toString() !== req.user.company?.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to delete this event'
-      });
+    if (event.company) {
+      let companyId;
+      if (typeof event.company === 'object' && event.company._id) {
+        companyId = event.company._id.toString();
+      } else {
+        companyId = event.company.toString();
+      }
+      
+      const userCompanyId = req.user.company?.toString();
+      if (companyId !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to delete this event'
+        });
+      }
     }
 
-    // Check permissions
-    if (req.user.role === 'salesman' && event.createdBy.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to delete this event'
-      });
+    // Check permissions for salesmen - they can only delete their own events
+    if (req.user.role === 'salesman') {
+      // Handle both populated and non-populated createdBy
+      let createdById;
+      if (event.createdBy) {
+        if (typeof event.createdBy === 'object' && event.createdBy._id) {
+          createdById = event.createdBy._id.toString();
+        } else {
+          createdById = event.createdBy.toString();
+        }
+      }
+      
+      const userId = req.user._id.toString();
+      
+      if (!createdById || createdById !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to delete this event'
+        });
+      }
     }
 
     await event.deleteOne();

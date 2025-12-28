@@ -20,6 +20,31 @@ const ensureBucketExists = async (bucketName, isPublic = true) => {
     
     if (listError) {
       console.error('Error listing buckets:', listError);
+      console.error('Error details:', JSON.stringify(listError, null, 2));
+      
+      // Check if it's a permissions issue
+      if (listError.message && listError.message.includes('permission')) {
+        console.error('⚠️  Permission error: The SUPABASE_SERVICE_ROLE key may not have storage admin permissions.');
+        console.error('   Please check your Supabase project settings and ensure the service role has storage access.');
+      }
+      
+      // If we can't list buckets, try to check if bucket exists by attempting to list files
+      // This is a fallback method
+      try {
+        const { data: files, error: listFilesError } = await supabase.storage
+          .from(bucketName)
+          .list('', { limit: 1 });
+        
+        if (!listFilesError) {
+          // Bucket exists if we can list files
+          console.log(`Bucket "${bucketName}" exists (verified by file listing)`);
+          return true;
+        } else {
+          console.error(`Cannot access bucket "${bucketName}":`, listFilesError);
+        }
+      } catch (checkError) {
+        console.error(`Cannot access bucket "${bucketName}":`, checkError);
+      }
       return false;
     }
 
@@ -37,7 +62,27 @@ const ensureBucketExists = async (bucketName, isPublic = true) => {
     });
 
     if (error) {
+      // Check if error is because bucket already exists (race condition)
+      if (error.message && (error.message.includes('already exists') || error.message.includes('duplicate'))) {
+        console.log(`Bucket "${bucketName}" already exists`);
+        return true;
+      }
       console.error(`Error creating bucket "${bucketName}":`, error);
+      console.error('Error details:', JSON.stringify(error, null, 2));
+      
+      // Provide specific guidance based on error type
+      if (error.message && error.message.includes('permission')) {
+        console.error('⚠️  Permission error: The SUPABASE_SERVICE_ROLE key may not have storage admin permissions.');
+        console.error('   Solution: Check your Supabase project API settings and ensure the service role key has storage access.');
+      } else if (error.message && error.message.includes('not found')) {
+        console.error('⚠️  Project not found: Check that SUPABASE_URL is correct.');
+      } else {
+        console.error('💡 Please ensure the bucket is created manually in Supabase dashboard:');
+        console.error('   1. Go to https://supabase.com/dashboard');
+        console.error('   2. Select your project');
+        console.error('   3. Navigate to Storage');
+        console.error(`   4. Click "New bucket" and create "${bucketName}" (Public: ${isPublic ? 'Yes' : 'No'})`);
+      }
       return false;
     }
 
@@ -72,7 +117,23 @@ const uploadFile = async (fileBuffer, fileName, bucket, folder = '', contentType
     // Ensure bucket exists before uploading
     const bucketExists = await ensureBucketExists(bucket, true);
     if (!bucketExists) {
-      throw new Error(`Failed to ensure bucket "${bucket}" exists`);
+      // Check if it's a connection/timeout issue
+      const errorMsg = `Failed to ensure bucket "${bucket}" exists. `;
+      const connectionIssue = `This might be due to:
+1. Network connectivity issues (check your internet connection)
+2. Supabase project might be paused (check your Supabase dashboard)
+3. DNS resolution issues (ERR_NAME_NOT_RESOLVED)
+4. Firewall blocking Supabase connections
+
+Please create the bucket "${bucket}" manually in your Supabase dashboard:
+- Go to https://supabase.com/dashboard
+- Select your project
+- Navigate to Storage
+- Click "New bucket"
+- Create bucket: "${bucket}" (Public: Yes)
+
+Or check that your SUPABASE_SERVICE_ROLE key has the necessary permissions.`;
+      throw new Error(errorMsg + connectionIssue);
     }
 
     // Generate unique filename with timestamp

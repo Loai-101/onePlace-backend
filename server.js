@@ -5,7 +5,15 @@ const helmet = require('helmet');
 const compression = require('compression');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
+const mongoSanitize = require('express-mongo-sanitize');
+const hpp = require('hpp');
 require('dotenv').config();
+
+// Validate required environment variables
+if (!process.env.JWT_SECRET) {
+  console.error('ERROR: JWT_SECRET environment variable is not set!');
+  process.exit(1);
+}
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -25,19 +33,33 @@ const calendarRoutes = require('./routes/calendar');
 const app = express();
 
 // CORS configuration - MUST be before other middleware
-app.use(cors({
-  origin: [
+const allowedOrigins = process.env.NODE_ENV === 'production' 
+  ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [])
+  : [
     'http://localhost:5173',
     'http://localhost:5174',
     'http://localhost:3000',
     'http://127.0.0.1:5173',
     'http://127.0.0.1:5174',
     'http://127.0.0.1:3000'
-  ],
+    ];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1 || allowedOrigins.length === 0) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  optionsSuccessStatus: 200
+  exposedHeaders: ['X-Total-Count'],
+  maxAge: 86400 // 24 hours
 }));
 
 // Handle preflight requests explicitly
@@ -57,23 +79,90 @@ app.options('*', cors({
 
 // Security middleware
 app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" }
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"],
+    },
+  },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  }
 }));
+
+// Data sanitization against NoSQL injection
+app.use(mongoSanitize());
+
+// Prevent HTTP Parameter Pollution
+app.use(hpp());
+
+// Compression middleware
 app.use(compression());
 
-// Rate limiting
-const limiter = rateLimit({
+// Rate limiting - stricter for auth endpoints
+const generalLimiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
   max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100, // limit each IP to 100 requests per windowMs
   message: {
+    success: false,
     error: 'Too many requests from this IP, please try again later.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    // Skip rate limiting for health check
+    return req.path === '/health';
   }
 });
-app.use('/api/', limiter);
 
-// Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Stricter rate limiting for auth endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // limit each IP to 5 requests per windowMs
+  message: {
+    success: false,
+    error: 'Too many login attempts, please try again later.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true
+});
+
+app.use('/api/', generalLimiter);
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
+
+// Body parsing middleware with size limits
+app.use(express.json({ 
+  limit: '10mb',
+  verify: (req, res, buf) => {
+    // Prevent JSON parsing errors from crashing the server
+    try {
+      JSON.parse(buf);
+    } catch (e) {
+      res.status(400).json({
+        success: false,
+        message: 'Invalid JSON format'
+      });
+      throw new Error('Invalid JSON');
+    }
+  }
+}));
+app.use(express.urlencoded({ 
+  extended: true, 
+  limit: '10mb',
+  parameterLimit: 100 // Limit number of parameters
+}));
 
 // Logging middleware
 if (process.env.NODE_ENV === 'development') {
@@ -85,12 +174,63 @@ app.use('/uploads', express.static('uploads'));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  const dbStatus = mongoose.connection.readyState;
+  const dbStates = {
+    0: 'disconnected',
+    1: 'connected',
+    2: 'connecting',
+    3: 'disconnecting'
+  };
+  
   res.status(200).json({
     status: 'OK',
     message: 'One Place API is running',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV
+    environment: process.env.NODE_ENV,
+    database: {
+      status: dbStates[dbStatus] || 'unknown',
+      connected: dbStatus === 1
+    }
   });
+});
+
+// Database health check endpoint
+app.get('/health/db', async (req, res) => {
+  try {
+    const dbStatus = mongoose.connection.readyState;
+    if (dbStatus !== 1) {
+      return res.status(503).json({
+        status: 'ERROR',
+        message: 'Database is not connected',
+        database: {
+          status: dbStatus,
+          readyState: mongoose.connection.readyState
+        }
+      });
+    }
+    
+    // Test database query
+    const User = require('./models/User');
+    const userCount = await User.countDocuments();
+    
+    res.status(200).json({
+      status: 'OK',
+      message: 'Database is connected and responding',
+      database: {
+        name: mongoose.connection.name,
+        host: mongoose.connection.host,
+        port: mongoose.connection.port,
+        readyState: mongoose.connection.readyState,
+        userCount: userCount
+      }
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: 'ERROR',
+      message: 'Database connection error',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Database error'
+    });
+  }
 });
 
 // API routes
@@ -118,7 +258,14 @@ app.use('*', (req, res) => {
 
 // Global error handler
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
+  // Log error details (but don't expose to client)
+  console.error('Error:', {
+    message: err.message,
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+    url: req.originalUrl,
+    method: req.method,
+    ip: req.ip
+  });
   
   // Mongoose validation error
   if (err.name === 'ValidationError') {
@@ -154,10 +301,20 @@ app.use((err, req, res, next) => {
     });
   }
   
-  // Default error
+  // Mongoose CastError (invalid ObjectId)
+  if (err.name === 'CastError') {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid ID format'
+    });
+  }
+  
+  // Default error - don't expose internal details in production
+  const isDevelopment = process.env.NODE_ENV === 'development';
   res.status(err.status || 500).json({
     success: false,
-    message: err.message || 'Internal server error'
+    message: err.message || 'Internal server error',
+    ...(isDevelopment && { stack: err.stack })
   });
 });
 
@@ -167,16 +324,43 @@ const connectDB = async () => {
     // Use environment variable or default to local MongoDB
     const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/oneplace';
     
-    const conn = await mongoose.connect(mongoURI, {
+    // Set connection options
+    const options = {
       useNewUrlParser: true,
       useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
+      socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
+    };
+    
+    const conn = await mongoose.connect(mongoURI, options);
+    
+    console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
+    console.log(`📊 Database: ${conn.connection.name}`);
+    
+    // Handle connection events
+    mongoose.connection.on('error', (err) => {
+      console.error('❌ MongoDB connection error:', err);
     });
     
-    console.log(`MongoDB Connected: ${conn.connection.host}`);
-    console.log(`Database: ${conn.connection.name}`);
+    mongoose.connection.on('disconnected', () => {
+      console.warn('⚠️  MongoDB disconnected');
+    });
+    
+    mongoose.connection.on('reconnected', () => {
+      console.log('✅ MongoDB reconnected');
+    });
+    
+    // Graceful shutdown
+    process.on('SIGINT', async () => {
+      await mongoose.connection.close();
+      console.log('MongoDB connection closed through app termination');
+      process.exit(0);
+    });
+    
   } catch (error) {
-    console.error('Database connection error:', error);
-    console.log('Please make sure MongoDB is running or set MONGODB_URI environment variable');
+    console.error('❌ Database connection error:', error.message);
+    console.log('💡 Please make sure MongoDB is running or set MONGODB_URI environment variable');
+    console.log('💡 Example: MONGODB_URI=mongodb://localhost:27017/oneplace');
     process.exit(1);
   }
 };

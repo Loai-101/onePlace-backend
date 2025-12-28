@@ -9,12 +9,29 @@ const upload = multer({
     fileSize: 5 * 1024 * 1024 // 5MB limit
   },
   fileFilter: (req, file, cb) => {
-    // Accept only image files
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed'), false);
+    // Whitelist allowed image MIME types
+    const allowedMimeTypes = [
+      'image/jpeg',
+      'image/jpg',
+      'image/png',
+      'image/gif',
+      'image/webp'
+    ];
+    
+    // Check MIME type
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      return cb(new Error('Only JPEG, PNG, GIF, and WebP images are allowed'), false);
     }
+    
+    // Check file extension
+    const allowedExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+    const fileExtension = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
+    
+    if (!allowedExtensions.includes(fileExtension)) {
+      return cb(new Error('Invalid file extension'), false);
+    }
+    
+    cb(null, true);
   }
 });
 
@@ -25,12 +42,22 @@ const uploadPdfMulter = multer({
     fileSize: 10 * 1024 * 1024 // 10MB limit for PDFs
   },
   fileFilter: (req, file, cb) => {
-    // Accept only PDF files
-    if (file.mimetype === 'application/pdf') {
-      cb(null, true);
-    } else {
-      cb(new Error('Only PDF files are allowed'), false);
+    // Check MIME type
+    if (file.mimetype !== 'application/pdf') {
+      return cb(new Error('Only PDF files are allowed'), false);
     }
+    
+    // Check file extension
+    const fileExtension = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
+    if (fileExtension !== '.pdf') {
+      return cb(new Error('Invalid file extension. Only PDF files are allowed'), false);
+    }
+    
+    // Sanitize filename
+    const sanitizedFilename = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
+    file.originalname = sanitizedFilename;
+    
+    cb(null, true);
   }
 });
 
