@@ -505,10 +505,18 @@ const sendReport = async (req, res) => {
       minute: '2-digit'
     });
 
+    // Validate company email exists
+    if (!company.email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Company email not found. Please update company information.'
+      });
+    }
+
     // Send email
     const emailResult = await emailService.sendSalesmanReport({
-      salesmanName: req.user.name,
-      salesmanEmail: req.user.email,
+      salesmanName: req.user.name || 'Salesman',
+      salesmanEmail: req.user.email || 'salesman@example.com',
       companyName: company.name,
       companyEmail: company.email,
       reportTitle: title,
@@ -517,21 +525,43 @@ const sendReport = async (req, res) => {
     });
 
     if (emailResult.success) {
+      console.log('✅ Report sent successfully:', {
+        salesman: req.user.name,
+        company: company.name,
+        email: company.email
+      });
       res.status(200).json({
         success: true,
         message: 'Report sent successfully to company email'
       });
     } else {
-      res.status(500).json({
-        success: false,
-        message: emailResult.message || 'Failed to send report email'
-      });
+      console.error('❌ Failed to send report email:', emailResult.message);
+      // If email service is not configured, still return success but with a warning
+      if (emailResult.fallback) {
+        console.log('⚠️ Email service not configured, using fallback mode');
+        res.status(200).json({
+          success: true,
+          message: 'Report prepared successfully (email service not configured)',
+          warning: 'Email was not sent. Please configure email service.'
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          message: emailResult.message || 'Failed to send report email. Please try again later.'
+        });
+      }
     }
   } catch (error) {
-    console.error('Send report error:', error);
+    console.error('❌ Send report error:', error);
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      user: req.user?.id,
+      company: req.user?.company
+    });
     res.status(500).json({
       success: false,
-      message: 'Error sending report'
+      message: error.message || 'Error sending report. Please try again later.'
     });
   }
 };
