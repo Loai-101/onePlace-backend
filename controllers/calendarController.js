@@ -477,13 +477,21 @@ const deleteCalendarEvent = async (req, res) => {
 // @access  Private (Salesman only)
 const sendReport = async (req, res) => {
   try {
-    const { title, content } = req.body;
+    const { title, content, recipientEmail } = req.body;
 
     // Validate required fields
     if (!title || !content) {
       return res.status(400).json({
         success: false,
         message: 'Report title and content are required'
+      });
+    }
+
+    // Validate recipient email if provided
+    if (recipientEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid recipient email address format'
       });
     }
 
@@ -505,11 +513,16 @@ const sendReport = async (req, res) => {
       minute: '2-digit'
     });
 
-    // Validate company email exists
-    if (!company.email) {
+    // Determine recipient email: use custom email if provided, otherwise use company email
+    const targetEmail = recipientEmail || company.email;
+
+    // Validate target email exists
+    if (!targetEmail) {
       return res.status(400).json({
         success: false,
-        message: 'Company email not found. Please update company information.'
+        message: recipientEmail 
+          ? 'Recipient email is required' 
+          : 'Company email not found. Please update company information or provide a recipient email.'
       });
     }
 
@@ -518,7 +531,7 @@ const sendReport = async (req, res) => {
       salesmanName: req.user.name || 'Salesman',
       salesmanEmail: req.user.email || 'salesman@example.com',
       companyName: company.name,
-      companyEmail: company.email,
+      companyEmail: targetEmail, // Use custom email or company email
       reportTitle: title,
       reportContent: content,
       reportDate: reportDate
@@ -527,12 +540,15 @@ const sendReport = async (req, res) => {
     if (emailResult.success) {
       console.log('✅ Report sent successfully:', {
         salesman: req.user.name,
+        salesmanEmail: req.user.email,
         company: company.name,
-        email: company.email
+        recipientEmail: targetEmail
       });
       res.status(200).json({
         success: true,
-        message: 'Report sent successfully to company email'
+        message: recipientEmail 
+          ? `Report sent successfully to ${targetEmail}`
+          : 'Report sent successfully to company email'
       });
     } else {
       console.error('❌ Failed to send report email:', emailResult.message);
