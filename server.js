@@ -34,7 +34,10 @@ const app = express();
 
 // CORS configuration - MUST be before other middleware
 const allowedOrigins = process.env.NODE_ENV === 'production' 
-  ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [])
+  ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()) : [
+      'https://one-place-frontend.vercel.app',
+      'https://*.vercel.app' // Allow all Vercel preview deployments
+    ])
   : [
     'http://localhost:5173',
     'http://localhost:5174',
@@ -49,10 +52,27 @@ app.use(cors({
     // Allow requests with no origin (mobile apps, Postman, etc.)
     if (!origin) return callback(null, true);
     
-    if (allowedOrigins.indexOf(origin) !== -1 || allowedOrigins.length === 0) {
+    // Check exact match
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      return callback(null, true);
+    }
+    
+    // Check wildcard patterns (for Vercel preview deployments)
+    const isAllowed = allowedOrigins.some(allowedOrigin => {
+      if (allowedOrigin.includes('*')) {
+        const pattern = allowedOrigin.replace(/\*/g, '.*');
+        const regex = new RegExp(`^${pattern}$`);
+        return regex.test(origin);
+      }
+      return false;
+    });
+    
+    if (isAllowed || allowedOrigins.length === 0) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      console.warn(`CORS blocked origin: ${origin}`);
+      console.warn(`Allowed origins:`, allowedOrigins);
+      callback(new Error(`Not allowed by CORS. Origin: ${origin}`));
     }
   },
   credentials: true,
@@ -64,14 +84,42 @@ app.use(cors({
 
 // Handle preflight requests explicitly
 app.options('*', cors({
-  origin: [
-    'http://localhost:5173',
-    'http://localhost:5174',
-    'http://localhost:3000',
-    'http://127.0.0.1:5173',
-    'http://127.0.0.1:5174',
-    'http://127.0.0.1:3000'
-  ],
+  origin: (origin, callback) => {
+    // Allow requests with no origin
+    if (!origin) return callback(null, true);
+    
+    // Production origins
+    const productionOrigins = process.env.NODE_ENV === 'production'
+      ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()) : [
+          'https://one-place-frontend.vercel.app',
+          /^https:\/\/.*\.vercel\.app$/
+        ])
+      : [];
+    
+    // Development origins
+    const devOrigins = [
+      'http://localhost:5173',
+      'http://localhost:5174',
+      'http://localhost:3000',
+      'http://127.0.0.1:5173',
+      'http://127.0.0.1:5174',
+      'http://127.0.0.1:3000'
+    ];
+    
+    const allOrigins = process.env.NODE_ENV === 'production' 
+      ? [...productionOrigins, ...devOrigins]
+      : devOrigins;
+    
+    // Check if origin matches
+    const isAllowed = allOrigins.some(allowed => {
+      if (allowed instanceof RegExp) {
+        return allowed.test(origin);
+      }
+      return allowed === origin;
+    });
+    
+    callback(null, isAllowed);
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
@@ -306,6 +354,16 @@ app.use((err, req, res, next) => {
     return res.status(400).json({
       success: false,
       message: 'Invalid ID format'
+    });
+  }
+  
+  // CORS errors
+  if (err.message && err.message.includes('CORS')) {
+    console.error('CORS Error:', err.message);
+    return res.status(403).json({
+      success: false,
+      message: 'CORS error: Request blocked. Please check backend CORS configuration.',
+      ...(process.env.NODE_ENV === 'development' && { details: err.message })
     });
   }
   

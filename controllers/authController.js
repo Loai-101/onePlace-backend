@@ -178,7 +178,12 @@ const login = async (req, res) => {
     }
 
     // Check for user by email or username (include password for comparison)
-    console.log('🔍 Looking for user with:', emailOrUsername);
+    console.log('🔍 Login attempt:', {
+      emailOrUsername,
+      timestamp: new Date().toISOString(),
+      ip: req.ip
+    });
+    
     const user = await User.findOne({
       $or: [
         { email: emailOrUsername },
@@ -186,29 +191,28 @@ const login = async (req, res) => {
       ]
     }).select('+password');
 
-    console.log('👤 User found:', user ? 'Yes' : 'No');
-    if (user) {
-      console.log('👤 User details:', {
-        id: user._id,
-        email: user.email,
-        username: user.username,
-        role: user.role,
-        isActive: user.isActive
-      });
-    }
-
     if (!user) {
+      console.log('❌ User not found:', emailOrUsername);
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
       });
     }
 
+    console.log('👤 User found:', {
+      id: user._id,
+      email: user.email,
+      username: user.username,
+      role: user.role,
+      isActive: user.isActive
+    });
+
     // Check if user is active
     if (!user.isActive) {
+      console.log('❌ Account is inactive:', user.email);
       return res.status(401).json({
         success: false,
-        message: 'Account is deactivated'
+        message: 'Account is deactivated. Please contact administrator.'
       });
     }
 
@@ -216,11 +220,14 @@ const login = async (req, res) => {
     const isMatch = await user.comparePassword(password);
 
     if (!isMatch) {
+      console.log('❌ Password mismatch for user:', user.email);
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
       });
     }
+
+    console.log('✅ Login successful for user:', user.email);
 
     // Update first login flag
     if (user.isFirstLogin) {
