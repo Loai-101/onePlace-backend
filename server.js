@@ -158,9 +158,10 @@ app.use(hpp());
 app.use(compression());
 
 // Rate limiting - stricter for auth endpoints
+// More lenient limits for production to handle multiple concurrent requests
 const generalLimiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100, // limit each IP to 100 requests per windowMs
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || (process.env.NODE_ENV === 'production' ? 500 : 100), // 500 requests per 15 min in production, 100 in dev
   message: {
     success: false,
     error: 'Too many requests from this IP, please try again later.'
@@ -169,21 +170,38 @@ const generalLimiter = rateLimit({
   legacyHeaders: false,
   skip: (req) => {
     // Skip rate limiting for health check
-    return req.path === '/health';
+    return req.path === '/health' || req.path === '/health/db';
+  },
+  // Use a custom key generator to better handle proxy/load balancer scenarios
+  keyGenerator: (req) => {
+    // Try to get the real IP from various headers (for proxies/load balancers)
+    return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
+           req.headers['x-real-ip'] || 
+           req.connection.remoteAddress || 
+           req.socket.remoteAddress ||
+           req.ip;
   }
 });
 
 // Stricter rate limiting for auth endpoints
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // limit each IP to 5 requests per windowMs
+  max: parseInt(process.env.RATE_LIMIT_AUTH_MAX) || (process.env.NODE_ENV === 'production' ? 10 : 5), // 10 attempts in production, 5 in dev
   message: {
     success: false,
     error: 'Too many login attempts, please try again later.'
   },
   standardHeaders: true,
   legacyHeaders: false,
-  skipSuccessfulRequests: true
+  skipSuccessfulRequests: true,
+  // Use a custom key generator for auth endpoints too
+  keyGenerator: (req) => {
+    return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
+           req.headers['x-real-ip'] || 
+           req.connection.remoteAddress || 
+           req.socket.remoteAddress ||
+           req.ip;
+  }
 });
 
 app.use('/api/', generalLimiter);

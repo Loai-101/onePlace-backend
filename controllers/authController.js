@@ -236,7 +236,37 @@ const login = async (req, res) => {
     }
 
     // Populate company information
-    await user.populate('company', 'name email phone');
+    await user.populate('company', 'name email phone status');
+
+    // For owners/admins, check if company is approved
+    if (user.role === 'owner' || user.role === 'admin') {
+      if (user.company) {
+        // Check if company exists and is approved
+        if (user.company.status && user.company.status !== 'approved') {
+          console.log('❌ Company not approved:', {
+            companyId: user.company._id,
+            status: user.company.status,
+            userEmail: user.email
+          });
+          
+          let message = 'Your company registration is pending approval.';
+          if (user.company.status === 'pending') {
+            message = 'Your company registration is pending approval. Please wait for admin approval before logging in.';
+          } else if (user.company.status === 'rejected') {
+            message = 'Your company registration was rejected. Please contact support for more information.';
+          }
+          
+          return res.status(403).json({
+            success: false,
+            message: message,
+            companyStatus: user.company.status
+          });
+        }
+      } else {
+        // Owner/admin without company - shouldn't happen but handle gracefully
+        console.log('⚠️ Owner/admin user without company:', user.email);
+      }
+    }
 
     sendTokenResponse(user, 200, res);
   } catch (error) {
