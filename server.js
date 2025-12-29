@@ -447,6 +447,20 @@ const PORT = process.env.PORT || 5000;
 const startServer = async () => {
   await connectDB();
   
+  // Check email service configuration
+  const emailService = require('./services/emailService');
+  const gmailUser = process.env.GMAIL_USER;
+  const gmailPassword = process.env.GMAIL_APP_PASSWORD;
+  
+  if (gmailUser && gmailPassword && gmailPassword !== 'your-app-password-here') {
+    console.log('📧 Email service: Gmail credentials configured');
+    // Email service will verify connection asynchronously
+  } else {
+    console.warn('⚠️  Email service: Gmail credentials NOT configured');
+    console.warn('⚠️  Email sending will be disabled. Set GMAIL_USER and GMAIL_APP_PASSWORD in Render.');
+    console.warn('📧 Refer to EMAIL_SETUP.md for setup instructions');
+  }
+  
   app.listen(PORT, () => {
     console.log(`🚀 One Place API Server running on port ${PORT}`);
     console.log(`📊 Environment: ${process.env.NODE_ENV}`);

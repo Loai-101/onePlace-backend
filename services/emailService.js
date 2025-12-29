@@ -5,12 +5,25 @@ const path = require('path');
 
 class EmailService {
   constructor() {
+    // Check if Gmail credentials are provided
+    const gmailUser = process.env.GMAIL_USER;
+    const gmailPassword = process.env.GMAIL_APP_PASSWORD;
+    
+    if (!gmailUser || !gmailPassword || gmailPassword === 'your-app-password-here') {
+      console.warn('⚠️ Gmail credentials (GMAIL_USER, GMAIL_APP_PASSWORD) are not set.');
+      console.warn('⚠️ Email service will operate in fallback mode (no emails sent).');
+      console.warn('📧 To enable email sending, set GMAIL_USER and GMAIL_APP_PASSWORD in Render environment variables.');
+      console.warn('📧 Refer to EMAIL_SETUP.md for instructions on generating a Gmail App Password.');
+      this.transporter = null; // Disable transporter if not configured
+      return;
+    }
+    
     // Create transporter for Gmail SMTP
     this.transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
-        user: process.env.GMAIL_USER || 'q9g8moh@gmail.com',
-        pass: process.env.GMAIL_APP_PASSWORD || 'your-app-password-here'
+        user: gmailUser,
+        pass: gmailPassword
       }
     });
     
@@ -19,12 +32,24 @@ class EmailService {
   }
   
   async verifyConnection() {
+    if (!this.transporter) {
+      console.log('⚠️ Email service not initialized - Gmail credentials missing');
+      return;
+    }
+    
     try {
       await this.transporter.verify();
       console.log('✅ Email service ready - SMTP connection verified');
+      console.log('📧 Gmail user:', process.env.GMAIL_USER);
     } catch (error) {
       console.error('❌ Email service configuration error:', error.message);
+      if (error.code === 'EAUTH' || error.responseCode === 535) {
+        console.error('   Authentication failed. Please check GMAIL_USER and GMAIL_APP_PASSWORD.');
+        console.error('   Ensure App Password is correct (not your regular Gmail password).');
+        console.error('   Refer to EMAIL_SETUP.md for instructions on generating an App Password.');
+      }
       console.log('📧 Please check your Gmail credentials and App Password');
+      this.transporter = null; // Disable transporter on verification failure
     }
   }
 
