@@ -999,15 +999,22 @@ Thank you for your interest in our platform. We encourage you to reapply when yo
         `
       };
 
-      // Attempt to send email
+      // Attempt to send email with timeout handling
       try {
-        const info = await this.transporter.sendMail(mailOptions);
+        // Set a longer timeout for actual email sending (30 seconds)
+        const sendPromise = this.transporter.sendMail(mailOptions);
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Email send timeout - Gmail SMTP may be slow or blocked')), 30000)
+        );
+        
+        const info = await Promise.race([sendPromise, timeoutPromise]);
         console.log('✅ Salesman report email sent successfully!');
         console.log('📧 Message ID:', info.messageId);
         console.log('📧 Sent to:', companyEmail);
+        console.log('📧 From:', salesmanEmail);
         return { success: true, messageId: info.messageId };
       } catch (sendError) {
-        console.error('❌ Error sending email:', sendError);
+        console.error('❌ Error sending email:', sendError.message || sendError);
         console.error('Error details:', {
           code: sendError.code,
           command: sendError.command,
@@ -1019,14 +1026,23 @@ Thank you for your interest in our platform. We encourage you to reapply when yo
         if (sendError.code === 'EAUTH' || sendError.responseCode === 535) {
           return { 
             success: false, 
-            message: 'Gmail authentication failed. Please check GMAIL_USER and GMAIL_APP_PASSWORD environment variables.',
+            message: 'Gmail authentication failed. Please check GMAIL_USER and GMAIL_APP_PASSWORD environment variables. Ensure you are using an App Password, not your regular Gmail password.',
+            fallback: true 
+          };
+        }
+        
+        // Check for timeout errors
+        if (sendError.message && (sendError.message.includes('timeout') || sendError.message.includes('ETIMEDOUT'))) {
+          return { 
+            success: false, 
+            message: 'Email send timeout. Gmail SMTP may be slow or blocked. Please try again later or check your network connection.',
             fallback: true 
           };
         }
         
         return { 
           success: false, 
-          message: `Failed to send email: ${sendError.message || 'Unknown error'}` 
+          message: `Failed to send email: ${sendError.message || 'Unknown error'}. Please check Gmail credentials and network connectivity.` 
         };
       }
     } catch (error) {
