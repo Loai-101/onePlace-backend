@@ -47,9 +47,37 @@ class EmailService {
         console.error('   Authentication failed. Please check GMAIL_USER and GMAIL_APP_PASSWORD.');
         console.error('   Ensure App Password is correct (not your regular Gmail password).');
         console.error('   Refer to EMAIL_SETUP.md for instructions on generating an App Password.');
+        // Don't set transporter to null - keep it for retry attempts
+        // The error will be caught when actually sending emails
+      } else {
+        console.log('📧 Please check your Gmail credentials and App Password');
       }
-      console.log('📧 Please check your Gmail credentials and App Password');
-      this.transporter = null; // Disable transporter on verification failure
+    }
+  }
+
+  // Re-initialize transporter if needed
+  initializeTransporter() {
+    const gmailUser = process.env.GMAIL_USER;
+    const gmailPassword = process.env.GMAIL_APP_PASSWORD;
+    
+    if (!gmailUser || !gmailPassword || gmailPassword === 'your-app-password-here') {
+      this.transporter = null;
+      return false;
+    }
+    
+    try {
+      this.transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+          user: gmailUser,
+          pass: gmailPassword
+        }
+      });
+      return true;
+    } catch (error) {
+      console.error('❌ Error creating email transporter:', error.message);
+      this.transporter = null;
+      return false;
     }
   }
 
@@ -889,10 +917,22 @@ Thank you for your interest in our platform. We encourage you to reapply when yo
         return { success: false, message: 'Email service not configured. Please set GMAIL_USER and GMAIL_APP_PASSWORD environment variables.', fallback: true };
       }
 
-      // Check if transporter is available
+      // Check if transporter is available, try to re-initialize if null
       if (!this.transporter) {
-        console.error('❌ Email transporter not initialized');
-        return { success: false, message: 'Email service not initialized', fallback: true };
+        console.log('⚠️ Email transporter not initialized, attempting to re-initialize...');
+        const initialized = this.initializeTransporter();
+        if (!initialized || !this.transporter) {
+          console.error('❌ Email transporter not initialized - Gmail credentials missing or invalid');
+          return { success: false, message: 'Email service not configured. Please set GMAIL_USER and GMAIL_APP_PASSWORD environment variables.', fallback: true };
+        }
+        // Try to verify the re-initialized transporter
+        try {
+          await this.transporter.verify();
+          console.log('✅ Email transporter re-initialized and verified');
+        } catch (verifyError) {
+          console.error('❌ Email transporter verification failed:', verifyError.message);
+          // Continue anyway - let the actual send attempt handle the error
+        }
       }
 
       const mailOptions = {
