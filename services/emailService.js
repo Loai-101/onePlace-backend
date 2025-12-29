@@ -849,8 +849,29 @@ Thank you for your interest in our platform. We encourage you to reapply when yo
 
   async sendSalesmanReport({ salesmanName, salesmanEmail, companyName, companyEmail, reportTitle, reportContent, reportDate }) {
     try {
+      // Validate required parameters
+      if (!companyEmail) {
+        console.error('❌ Company email is missing');
+        return { success: false, message: 'Company email is required' };
+      }
+
+      // Check if email service is configured
+      const gmailUser = process.env.GMAIL_USER;
+      const gmailPassword = process.env.GMAIL_APP_PASSWORD;
+      
+      if (!gmailUser || !gmailPassword || gmailPassword === 'your-app-password-here') {
+        console.log('⚠️ Email service not configured - Gmail credentials missing');
+        return { success: false, message: 'Email service not configured. Please set GMAIL_USER and GMAIL_APP_PASSWORD environment variables.', fallback: true };
+      }
+
+      // Check if transporter is available
+      if (!this.transporter) {
+        console.error('❌ Email transporter not initialized');
+        return { success: false, message: 'Email service not initialized', fallback: true };
+      }
+
       const mailOptions = {
-        from: `"${salesmanName}" <${process.env.GMAIL_USER}>`,
+        from: `"${salesmanName}" <${gmailUser}>`,
         to: companyEmail,
         subject: `Sales Report from ${salesmanName} - ${reportTitle}`,
         replyTo: salesmanEmail,
@@ -900,21 +921,43 @@ Thank you for your interest in our platform. We encourage you to reapply when yo
         `
       };
 
-      if (this.transporter) {
+      // Attempt to send email
+      try {
         const info = await this.transporter.sendMail(mailOptions);
         console.log('✅ Salesman report email sent successfully!');
         console.log('📧 Message ID:', info.messageId);
+        console.log('📧 Sent to:', companyEmail);
         return { success: true, messageId: info.messageId };
-      } else {
-        console.log('📧 Email Preview (Salesman Report):');
-        console.log('To:', companyEmail);
-        console.log('Subject:', mailOptions.subject);
-        console.log('Report:', reportContent);
-        return { success: false, message: 'Email service not configured', fallback: true };
+      } catch (sendError) {
+        console.error('❌ Error sending email:', sendError);
+        console.error('Error details:', {
+          code: sendError.code,
+          command: sendError.command,
+          response: sendError.response,
+          message: sendError.message
+        });
+        
+        // Check for specific Gmail authentication errors
+        if (sendError.code === 'EAUTH' || sendError.responseCode === 535) {
+          return { 
+            success: false, 
+            message: 'Gmail authentication failed. Please check GMAIL_USER and GMAIL_APP_PASSWORD environment variables.',
+            fallback: true 
+          };
+        }
+        
+        return { 
+          success: false, 
+          message: `Failed to send email: ${sendError.message || 'Unknown error'}` 
+        };
       }
     } catch (error) {
-      console.error('Email Error:', error);
-      return { success: false, message: error.message };
+      console.error('❌ Email service error:', error);
+      console.error('Error stack:', error.stack);
+      return { 
+        success: false, 
+        message: error.message || 'Unknown error occurred while sending email' 
+      };
     }
   }
 }
