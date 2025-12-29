@@ -38,19 +38,32 @@ class EmailService {
     }
     
     try {
-      await this.transporter.verify();
+      // Set a timeout for verification (5 seconds)
+      const verifyPromise = this.transporter.verify();
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Connection timeout')), 5000)
+      );
+      
+      await Promise.race([verifyPromise, timeoutPromise]);
       console.log('✅ Email service ready - SMTP connection verified');
       console.log('📧 Gmail user:', process.env.GMAIL_USER);
     } catch (error) {
-      console.error('❌ Email service configuration error:', error.message);
-      if (error.code === 'EAUTH' || error.responseCode === 535) {
+      // Don't fail completely on timeout - Gmail SMTP might still work
+      if (error.message === 'Connection timeout') {
+        console.warn('⚠️ Email service verification timeout - SMTP connection may still work');
+        console.warn('📧 Gmail credentials are set. Emails will be attempted when sending.');
+        console.warn('📧 If emails fail to send, check network connectivity and Gmail App Password.');
+        // Keep transporter - don't disable it on timeout
+      } else if (error.code === 'EAUTH' || error.responseCode === 535) {
+        console.error('❌ Email service authentication error:', error.message);
         console.error('   Authentication failed. Please check GMAIL_USER and GMAIL_APP_PASSWORD.');
         console.error('   Ensure App Password is correct (not your regular Gmail password).');
         console.error('   Refer to EMAIL_SETUP.md for instructions on generating an App Password.');
         // Don't set transporter to null - keep it for retry attempts
-        // The error will be caught when actually sending emails
       } else {
-        console.log('📧 Please check your Gmail credentials and App Password');
+        console.warn('⚠️ Email service verification warning:', error.message);
+        console.warn('📧 Gmail credentials are set. Emails will be attempted when sending.');
+        // Keep transporter - verification errors don't always mean sending will fail
       }
     }
   }
