@@ -896,10 +896,10 @@ Thank you for your interest in our platform. We encourage you to reapply when yo
       }
 
       const mailOptions = {
-        from: `"${salesmanName}" <${salesmanEmail}>`, // Show salesman email in from field
+        from: `"${salesmanName} (${salesmanEmail})" <${gmailUser}>`, // From Gmail account but display salesman name/email
         to: companyEmail,
         subject: `Sales Report from ${salesmanName} - ${reportTitle}`,
-        replyTo: salesmanEmail, // Set reply-to to salesman email
+        replyTo: salesmanEmail, // Replies will go to salesman email
         text: `Sales Report from ${salesmanName}\n\nDate: ${reportDate}\n\nTitle: ${reportTitle}\n\nReport:\n${reportContent}\n\n---\nThis report was sent from the OnePlace PMS system.\nSalesman: ${salesmanName} (${salesmanEmail})`,
         html: `
           <!DOCTYPE html>
