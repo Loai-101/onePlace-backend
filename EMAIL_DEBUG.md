@@ -31,7 +31,7 @@ The email service cannot initialize because Gmail credentials are missing or inc
 
 **GMAIL_APP_PASSWORD should be:**
 - A 16-character App Password (no spaces, no quotes)
-- Example: `qnvstekzyiwcwhdg` ✅
+- Example: `abcd efgh ijkl mnop` (shown by Google) → use as `abcdefghijklmnop` ✅
 - Wrong: `"qnvs tekz yiwc whdg"` ❌ (has spaces and quotes)
 - Wrong: `qnvs tekz yiwc whdg` ❌ (has spaces)
 
