@@ -17,6 +17,7 @@ const getCategories = async (req, res) => {
 
     const categories = await Category.find(query)
       .populate('brand', 'name logo brandColor')
+      .populate('brands', 'name logo brandColor')
       .populate('parent', 'name slug')
       .sort({ sortOrder: 1, name: 1 });
 
@@ -53,13 +54,53 @@ const getCategories = async (req, res) => {
       const catId = category._id.toString();
       const brandCounts = categoryBrandCounts[catId] || {};
       
-      const brandProductCounts = Object.values(brandCounts).map(item => ({
-        brandId: item.brand._id,
-        brandName: item.brand.name,
-        brandLogo: item.brand.logo,
-        brandColor: item.brand.brandColor,
-        productCount: item.count
-      }));
+      // Start with brands from products
+      const brandProductCountsMap = new Map();
+      Object.values(brandCounts).forEach(item => {
+        const brandId = item.brand._id.toString();
+        brandProductCountsMap.set(brandId, {
+          brandId: item.brand._id,
+          brandName: item.brand.name,
+          brandLogo: item.brand.logo,
+          brandColor: item.brand.brandColor,
+          productCount: item.count
+        });
+      });
+      
+      // Add brands from category's brands array (if they exist and aren't already in the map)
+      if (category.brands && Array.isArray(category.brands) && category.brands.length > 0) {
+        category.brands.forEach(brand => {
+          if (brand && brand._id) {
+            const brandId = brand._id.toString();
+            if (!brandProductCountsMap.has(brandId)) {
+              // Brand is associated with category but has no products yet
+              brandProductCountsMap.set(brandId, {
+                brandId: brand._id,
+                brandName: brand.name,
+                brandLogo: brand.logo,
+                brandColor: brand.brandColor,
+                productCount: 0 // No products yet, but brand is associated
+              });
+            }
+          }
+        });
+      }
+      
+      // Also check single brand field for backward compatibility
+      if (category.brand && category.brand._id) {
+        const brandId = category.brand._id.toString();
+        if (!brandProductCountsMap.has(brandId)) {
+          brandProductCountsMap.set(brandId, {
+            brandId: category.brand._id,
+            brandName: category.brand.name,
+            brandLogo: category.brand.logo,
+            brandColor: category.brand.brandColor,
+            productCount: 0
+          });
+        }
+      }
+      
+      const brandProductCounts = Array.from(brandProductCountsMap.values());
       
       categoryObj.brandProductCounts = brandProductCounts;
       categoryObj.totalProductCount = brandProductCounts.reduce((sum, item) => sum + item.productCount, 0);
@@ -108,6 +149,7 @@ const getCategory = async (req, res) => {
   try {
     const category = await Category.findById(req.params.id)
       .populate('brand', 'name logo brandColor')
+      .populate('brands', 'name logo brandColor')
       .populate('parent', 'name slug')
       .populate('children', 'name slug productCount');
     
@@ -163,7 +205,28 @@ const getCategory = async (req, res) => {
 // @access  Private (Owner/Admin)
 const createCategory = async (req, res) => {
   try {
-    const category = await Category.create(req.body);
+    // Handle brands array - if brands array is provided, use it; otherwise use single brand
+    const categoryData = { ...req.body };
+    
+    if (categoryData.brands && Array.isArray(categoryData.brands) && categoryData.brands.length > 0) {
+      // If brands array is provided, set brand to first brand for backward compatibility
+      if (!categoryData.brand) {
+        categoryData.brand = categoryData.brands[0];
+      }
+    } else if (categoryData.brand && !categoryData.brands) {
+      // If only single brand is provided, create brands array
+      categoryData.brands = [categoryData.brand];
+    }
+    
+    // Validate that at least one brand is set
+    if (!categoryData.brand && (!categoryData.brands || categoryData.brands.length === 0)) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one brand is required'
+      });
+    }
+
+    const category = await Category.create(categoryData);
 
     res.status(201).json({
       success: true,
@@ -183,10 +246,32 @@ const createCategory = async (req, res) => {
 // @access  Private (Owner/Admin)
 const updateCategory = async (req, res) => {
   try {
-    const category = await Category.findByIdAndUpdate(req.params.id, req.body, {
+    // Handle brands array - if brands array is provided, use it; otherwise use single brand
+    const updateData = { ...req.body };
+    
+    if (updateData.brands && Array.isArray(updateData.brands) && updateData.brands.length > 0) {
+      // If brands array is provided, set brand to first brand for backward compatibility
+      if (!updateData.brand) {
+        updateData.brand = updateData.brands[0];
+      }
+    } else if (updateData.brand && !updateData.brands) {
+      // If only single brand is provided, create brands array
+      updateData.brands = [updateData.brand];
+    }
+    
+    // Validate that at least one brand is set
+    if (updateData.brands !== undefined && updateData.brands.length === 0 && !updateData.brand) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one brand is required'
+      });
+    }
+
+    const category = await Category.findByIdAndUpdate(req.params.id, updateData, {
       new: true,
       runValidators: true
-    });
+    }).populate('brand', 'name logo brandColor')
+      .populate('brands', 'name logo brandColor');
 
     if (!category) {
       return res.status(404).json({

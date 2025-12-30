@@ -10,8 +10,12 @@ const categorySchema = new mongoose.Schema({
   brand: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Brand',
-    required: [true, 'Brand is required']
+    required: false // Made optional to support brands array
   },
+  brands: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Brand'
+  }],
   description: {
     type: String,
     trim: true,
@@ -75,8 +79,9 @@ const categorySchema = new mongoose.Schema({
 });
 
 // Index for better performance
-categorySchema.index({ name: 1, brand: 1 }, { unique: true }); // Unique category name per brand
+categorySchema.index({ name: 1, brand: 1 }, { unique: false }); // Changed to false to allow multiple brands
 categorySchema.index({ brand: 1 });
+categorySchema.index({ brands: 1 });
 categorySchema.index({ slug: 1 });
 categorySchema.index({ parent: 1 });
 categorySchema.index({ isActive: 1 });

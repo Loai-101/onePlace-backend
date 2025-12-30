@@ -33,19 +33,26 @@ const calendarRoutes = require('./routes/calendar');
 const app = express();
 
 // CORS configuration - MUST be before other middleware
-const allowedOrigins = process.env.NODE_ENV === 'production' 
-  ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()) : [
+// Always allow localhost for local development, even in production mode
+const localhostOrigins = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+  'http://127.0.0.1:3000'
+];
+
+const productionOrigins = process.env.ALLOWED_ORIGINS 
+  ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
+  : [
       'https://one-place-frontend.vercel.app',
       'https://*.vercel.app' // Allow all Vercel preview deployments
-    ])
-  : [
-    'http://localhost:5173',
-    'http://localhost:5174',
-    'http://localhost:3000',
-    'http://127.0.0.1:5173',
-    'http://127.0.0.1:5174',
-    'http://127.0.0.1:3000'
     ];
+
+const allowedOrigins = process.env.NODE_ENV === 'production' 
+  ? [...productionOrigins, ...localhostOrigins] // Include localhost even in production for local dev
+  : localhostOrigins;
 
 app.use(cors({
   origin: (origin, callback) => {
