@@ -238,7 +238,7 @@ if (process.env.NODE_ENV === 'development') {
 // Static files
 app.use('/uploads', express.static('uploads'));
 
-// Health check endpoint
+// Health check endpoint (optimized for Render free plan - keep service alive)
 app.get('/health', (req, res) => {
   const dbStatus = mongoose.connection.readyState;
   const dbStates = {
@@ -247,6 +247,13 @@ app.get('/health', (req, res) => {
     2: 'connecting',
     3: 'disconnecting'
   };
+  
+  // No caching for health check - always return fresh status
+  res.set({
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0'
+  });
   
   res.status(200).json({
     status: 'OK',
@@ -400,12 +407,16 @@ const connectDB = async () => {
     // Use environment variable or default to local MongoDB
     const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/oneplace';
     
-    // Set connection options
+    // Set connection options optimized for Render free plan
     const options = {
       useNewUrlParser: true,
       useUnifiedTopology: true,
       serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
       socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
+      maxPoolSize: 10, // Maximum number of connections in the pool
+      minPoolSize: 2, // Minimum number of connections to maintain
+      maxIdleTimeMS: 30000, // Close connections after 30s of inactivity
+      heartbeatFrequencyMS: 10000, // Send heartbeat every 10s to keep connection alive
     };
     
     const conn = await mongoose.connect(mongoURI, options);
