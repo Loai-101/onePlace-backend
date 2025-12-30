@@ -24,10 +24,10 @@ The email service cannot initialize because Gmail credentials are missing or inc
 ### Step 2: Verify the Values
 
 **GMAIL_USER should be:**
-- Your Gmail address (e.g., `q9g8moh@gmail.com`)
+- Your Gmail address (e.g., `your-email@gmail.com`)
 - No quotes, no spaces
-- Example: `q9g8moh@gmail.com` ✅
-- Wrong: `"q9g8moh@gmail.com"` ❌
+- Example: `your-email@gmail.com` ✅
+- Wrong: `"your-email@gmail.com"` ❌
 
 **GMAIL_APP_PASSWORD should be:**
 - A 16-character App Password (no spaces, no quotes)
@@ -66,7 +66,7 @@ After redeployment, check your Render logs. You should see:
 ```
 📧 Email service: Gmail credentials configured
 ✅ Email service ready - SMTP connection verified
-📧 Gmail user: q9g8moh@gmail.com
+📧 Gmail user: your-email@gmail.com
 ```
 
 **❌ If still not working:**
