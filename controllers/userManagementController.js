@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const Company = require('../models/Company');
+const PasswordResetRequest = require('../models/PasswordResetRequest');
 const emailService = require('../services/emailService');
 
 // @desc    Get all users for the logged-in owner's company
@@ -245,12 +246,20 @@ const updateUser = async (req, res) => {
       });
     }
 
-    // Validate role if being updated
-    if (updates.role && !['salesman', 'accountant'].includes(updates.role)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid role. Only Salesman and Accountant roles can be assigned. Each company can only have one admin (the owner).'
-      });
+    // Validate role only if it's being changed to a different role
+    if (updates.role && updates.role !== user.role) {
+      // Only validate if changing to a new role (not keeping the same role)
+      if (!['salesman', 'accountant'].includes(updates.role)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid role. Only Salesman and Accountant roles can be assigned. Each company can only have one admin (the owner).'
+        });
+      }
+    }
+    
+    // If role is provided but same as current, don't update it (to avoid unnecessary validation)
+    if (updates.role && updates.role === user.role) {
+      delete updates.role; // Remove role from updates if it's not changing
     }
 
     // Update allowed fields
@@ -535,6 +544,216 @@ const updateSalesmanForecast = async (req, res) => {
   }
 };
 
+// @desc    Get password reset requests for company
+// @route   GET /api/user-management/password-reset-requests
+// @access  Private (Owner/Admin)
+const getPasswordResetRequests = async (req, res) => {
+  try {
+    const requestingUser = await User.findById(req.user.id);
+    
+    if (!requestingUser || !requestingUser.company) {
+      return res.status(400).json({
+        success: false,
+        message: 'User must be associated with a company'
+      });
+    }
+
+    const { status } = req.query;
+    let query = {};
+
+    // Get all users in the company
+    const companyUsers = await User.find({ company: requestingUser.company }).select('_id');
+    const userIds = companyUsers.map(u => u._id);
+
+    console.log('🔍 Password Reset Requests Query:', {
+      requestingUserId: req.user.id,
+      requestingUserCompany: requestingUser.company,
+      companyUsersCount: companyUsers.length,
+      userIds: userIds.length,
+      statusFilter: status
+    });
+
+    query.user = { $in: userIds };
+
+    if (status) {
+      query.status = status;
+    }
+
+    const requests = await PasswordResetRequest.find(query)
+      .populate('user', 'name email username role company')
+      .populate('completedBy', 'name email username')
+      .sort({ createdAt: -1 });
+
+    console.log('✅ Found password reset requests:', {
+      count: requests.length,
+      requests: requests.map(r => ({
+        id: r._id,
+        email: r.email,
+        userId: r.user?._id,
+        userName: r.user?.name,
+        status: r.status,
+        createdAt: r.createdAt
+      }))
+    });
+
+    res.status(200).json({
+      success: true,
+      count: requests.length,
+      data: requests
+    });
+  } catch (error) {
+    console.error('Get password reset requests error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching password reset requests'
+    });
+  }
+};
+
+// @desc    Complete password reset request
+// @route   PUT /api/user-management/password-reset-requests/:id/complete
+// @access  Private (Owner/Admin)
+const completePasswordResetRequest = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { newPassword, notes } = req.body;
+
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 6 characters long'
+      });
+    }
+
+    const request = await PasswordResetRequest.findById(id).populate('user');
+
+    if (!request) {
+      return res.status(404).json({
+        success: false,
+        message: 'Password reset request not found'
+      });
+    }
+
+    if (request.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'This request has already been processed'
+      });
+    }
+
+    // Check if requesting user has access (same company)
+    const requestingUser = await User.findById(req.user.id);
+    const userCompanyId = request.user.company._id ? request.user.company._id.toString() : request.user.company.toString();
+    const requestingUserCompanyId = requestingUser.company.toString();
+
+    if (userCompanyId !== requestingUserCompanyId) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to complete this request'
+      });
+    }
+
+    // Update user password
+    const user = await User.findById(request.user._id);
+    user.password = newPassword;
+    user.isFirstLogin = true; // Mark as first login to prompt password change
+    await user.save();
+
+    // Update request
+    request.status = 'completed';
+    request.completedBy = req.user.id;
+    request.completedAt = new Date();
+    request.newPassword = newPassword; // Store for reference (will be hashed if needed)
+    if (notes) {
+      request.notes = notes;
+    }
+    await request.save();
+
+    // Send email with new password
+    try {
+      const company = await Company.findById(user.company);
+      await emailService.sendPasswordResetEmail({
+        userName: user.name,
+        userEmail: user.email,
+        newPassword,
+        companyName: company.name
+      });
+      console.log('✅ Password reset email sent to:', user.email);
+    } catch (emailError) {
+      console.error('⚠️ Failed to send password reset email:', emailError);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Password reset completed. New password sent via email.',
+      data: request
+    });
+  } catch (error) {
+    console.error('Complete password reset request error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error completing password reset request'
+    });
+  }
+};
+
+// @desc    Reject password reset request
+// @route   PUT /api/user-management/password-reset-requests/:id/reject
+// @access  Private (Owner/Admin)
+const rejectPasswordResetRequest = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { notes } = req.body;
+
+    const request = await PasswordResetRequest.findById(id).populate('user');
+
+    if (!request) {
+      return res.status(404).json({
+        success: false,
+        message: 'Password reset request not found'
+      });
+    }
+
+    if (request.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'This request has already been processed'
+      });
+    }
+
+    // Check if requesting user has access (same company)
+    const requestingUser = await User.findById(req.user.id);
+    const userCompanyId = request.user.company._id ? request.user.company._id.toString() : request.user.company.toString();
+    const requestingUserCompanyId = requestingUser.company.toString();
+
+    if (userCompanyId !== requestingUserCompanyId) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to reject this request'
+      });
+    }
+
+    // Update request
+    request.status = 'rejected';
+    if (notes) {
+      request.notes = notes;
+    }
+    await request.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Password reset request rejected',
+      data: request
+    });
+  } catch (error) {
+    console.error('Reject password reset request error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error rejecting password reset request'
+    });
+  }
+};
+
 module.exports = {
   getCompanyUsers,
   getUserDetails,
@@ -543,6 +762,9 @@ module.exports = {
   toggleUserStatus,
   resetUserPassword,
   deleteUser,
-  updateSalesmanForecast
+  updateSalesmanForecast,
+  getPasswordResetRequests,
+  completePasswordResetRequest,
+  rejectPasswordResetRequest
 };
 

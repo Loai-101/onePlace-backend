@@ -7,6 +7,12 @@ const categorySchema = new mongoose.Schema({
     trim: true,
     maxlength: [100, 'Category name cannot exceed 100 characters']
   },
+  mainCategory: {
+    type: String,
+    enum: ['medical', 'it-solutions', 'pharmacy', 'salon'],
+    required: [true, 'Main category is required'],
+    trim: true
+  },
   brand: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Brand',
@@ -80,6 +86,7 @@ const categorySchema = new mongoose.Schema({
 
 // Index for better performance
 categorySchema.index({ name: 1, brand: 1 }, { unique: false }); // Changed to false to allow multiple brands
+categorySchema.index({ mainCategory: 1 }); // Index for main category filtering
 categorySchema.index({ brand: 1 });
 categorySchema.index({ brands: 1 });
 categorySchema.index({ slug: 1 });

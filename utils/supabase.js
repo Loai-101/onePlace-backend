@@ -99,6 +99,7 @@ const ensureBucketExists = async (bucketName, isPublic = true) => {
   try {
     await ensureBucketExists('images', true);
     await ensureBucketExists('invoices', true);
+    await ensureBucketExists('reports', true);
   } catch (error) {
     console.error('Error initializing buckets:', error);
   }

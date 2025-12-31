@@ -17,7 +17,11 @@ const {
   getCompanyUpdateRequests,
   getCompanyUpdateRequest,
   approveCompanyUpdateRequest,
-  rejectCompanyUpdateRequest
+  rejectCompanyUpdateRequest,
+  getPasswordResetRequests,
+  getPasswordResetRequest,
+  completePasswordResetRequest,
+  rejectPasswordResetRequest
 } = require('../controllers/adminController');
 const { protectAdmin } = require('../middleware/auth');
 
@@ -47,6 +51,12 @@ router.get('/company-update-requests', getCompanyUpdateRequests);
 router.get('/company-update-requests/:id', getCompanyUpdateRequest);
 router.patch('/company-update-requests/:id/approve', approveCompanyUpdateRequest);
 router.patch('/company-update-requests/:id/reject', rejectCompanyUpdateRequest);
+
+// Password reset requests routes
+router.get('/password-reset-requests', getPasswordResetRequests);
+router.get('/password-reset-requests/:id', getPasswordResetRequest);
+router.put('/password-reset-requests/:id/complete', completePasswordResetRequest);
+router.put('/password-reset-requests/:id/reject', rejectPasswordResetRequest);
 
 // Admin management routes
 router.get('/admins', getAllAdmins);

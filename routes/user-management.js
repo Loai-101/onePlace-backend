@@ -9,7 +9,10 @@ const {
   toggleUserStatus,
   resetUserPassword,
   deleteUser,
-  updateSalesmanForecast
+  updateSalesmanForecast,
+  getPasswordResetRequests,
+  completePasswordResetRequest,
+  rejectPasswordResetRequest
 } = require('../controllers/userManagementController');
 
 // All routes require authentication
@@ -28,6 +31,11 @@ router.route('/:id')
 router.patch('/:id/toggle-status', toggleUserStatus);
 router.post('/:id/reset-password', resetUserPassword);
 router.post('/:id/forecast', updateSalesmanForecast);
+
+// Password reset request routes
+router.get('/password-reset-requests', getPasswordResetRequests);
+router.put('/password-reset-requests/:id/complete', completePasswordResetRequest);
+router.put('/password-reset-requests/:id/reject', rejectPasswordResetRequest);
 
 module.exports = router;
 

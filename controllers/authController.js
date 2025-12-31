@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const Company = require('../models/Company');
+const PasswordResetRequest = require('../models/PasswordResetRequest');
 const { sendTokenResponse } = require('../middleware/auth');
 
 // @desc    Register user (owner or other roles)
@@ -528,7 +529,16 @@ const updateUserPassword = async (req, res) => {
 // @access  Public
 const forgotPassword = async (req, res) => {
   try {
-    const user = await User.findOne({ email: req.body.email });
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
 
     if (!user) {
       return res.status(404).json({
@@ -537,11 +547,46 @@ const forgotPassword = async (req, res) => {
       });
     }
 
-    // TODO: Generate reset token and send email
-    // For now, just return success
+    // Check if user has a company (required for admin to see the request)
+    if (!user.company) {
+      return res.status(400).json({
+        success: false,
+        message: 'Your account is not associated with a company. Please contact support for password reset.'
+      });
+    }
+
+    // Check if there's already a pending request for this user
+    const existingRequest = await PasswordResetRequest.findOne({
+      user: user._id,
+      status: 'pending'
+    });
+
+    if (existingRequest) {
+      return res.status(200).json({
+        success: true,
+        message: 'Password reset request already submitted. Please wait for admin approval.'
+      });
+    }
+
+    // Create password reset request
+    const resetRequest = await PasswordResetRequest.create({
+      user: user._id,
+      email: user.email,
+      status: 'pending'
+    });
+
+    console.log('✅ Password reset request created:', {
+      requestId: resetRequest._id,
+      userId: user._id,
+      email: user.email,
+      company: user.company,
+      status: resetRequest.status,
+      createdAt: resetRequest.createdAt
+    });
+
     res.status(200).json({
       success: true,
-      message: 'Password reset instructions sent to email'
+      message: 'Password reset request submitted. An admin will review and reset your password.'
     });
   } catch (error) {
     console.error('Forgot password error:', error);

@@ -5,7 +5,7 @@ const Brand = require('../models/Brand');
 // @access  Public
 const getBrands = async (req, res) => {
   try {
-    const { includeInactive = false, featured = false } = req.query;
+    const { includeInactive = false, featured = false, mainCategory } = req.query;
 
     let query = {};
     if (!includeInactive) {
@@ -13,6 +13,22 @@ const getBrands = async (req, res) => {
     }
     if (featured === 'true') {
       query.isFeatured = true;
+    }
+
+    // If mainCategory filter is provided, filter brands that have products with this mainCategory
+    if (mainCategory && mainCategory !== 'all' && mainCategory !== 'All') {
+      const Product = require('../models/Product');
+      const products = await Product.find({ mainCategory: mainCategory, status: 'active' }).select('brand');
+      const brandIds = [...new Set(products.map(p => p.brand?.toString()).filter(Boolean))];
+      if (brandIds.length === 0) {
+        // No brands found for this mainCategory
+        return res.status(200).json({
+          success: true,
+          count: 0,
+          data: []
+        });
+      }
+      query._id = { $in: brandIds };
     }
 
     const brands = await Brand.find(query)

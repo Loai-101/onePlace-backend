@@ -2,6 +2,7 @@ const Admin = require('../models/Admin');
 const Company = require('../models/Company');
 const User = require('../models/User');
 const CompanyUpdateRequest = require('../models/CompanyUpdateRequest');
+const PasswordResetRequest = require('../models/PasswordResetRequest');
 const jwt = require('jsonwebtoken');
 const emailService = require('../services/emailService');
 
@@ -1052,6 +1053,208 @@ const rejectCompanyUpdateRequest = async (req, res) => {
   }
 };
 
+// @desc    Get all password reset requests (for admin)
+// @route   GET /api/admin/password-reset-requests
+// @access  Private (Admin)
+const getPasswordResetRequests = async (req, res) => {
+  try {
+    const { status } = req.query;
+    let query = {};
+
+    if (status) {
+      query.status = status;
+    }
+
+    const requests = await PasswordResetRequest.find(query)
+      .populate('user', 'name email username role company')
+      .populate('completedBy', 'name email username')
+      .sort({ createdAt: -1 });
+
+    // Populate company for each user
+    const requestsWithCompany = await Promise.all(
+      requests.map(async (request) => {
+        const requestObj = request.toObject();
+        if (requestObj.user && requestObj.user.company) {
+          const company = await Company.findById(requestObj.user.company);
+          requestObj.user.company = company;
+        }
+        return requestObj;
+      })
+    );
+
+    console.log('✅ Admin found password reset requests:', {
+      count: requestsWithCompany.length,
+      statusFilter: status
+    });
+
+    res.status(200).json({
+      success: true,
+      count: requestsWithCompany.length,
+      data: requestsWithCompany
+    });
+  } catch (error) {
+    console.error('Get password reset requests error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching password reset requests'
+    });
+  }
+};
+
+// @desc    Get single password reset request (for admin)
+// @route   GET /api/admin/password-reset-requests/:id
+// @access  Private (Admin)
+const getPasswordResetRequest = async (req, res) => {
+  try {
+    const request = await PasswordResetRequest.findById(req.params.id)
+      .populate('user', 'name email username role company')
+      .populate('completedBy', 'name email username');
+
+    if (!request) {
+      return res.status(404).json({
+        success: false,
+        message: 'Password reset request not found'
+      });
+    }
+
+    // Populate company
+    if (request.user && request.user.company) {
+      const company = await Company.findById(request.user.company);
+      request.user.company = company;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: request
+    });
+  } catch (error) {
+    console.error('Get password reset request error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching password reset request'
+    });
+  }
+};
+
+// @desc    Complete password reset request (for admin)
+// @route   PUT /api/admin/password-reset-requests/:id/complete
+// @access  Private (Admin)
+const completePasswordResetRequest = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { newPassword, notes } = req.body;
+
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 6 characters long'
+      });
+    }
+
+    const request = await PasswordResetRequest.findById(id).populate('user');
+
+    if (!request) {
+      return res.status(404).json({
+        success: false,
+        message: 'Password reset request not found'
+      });
+    }
+
+    if (request.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'This request has already been processed'
+      });
+    }
+
+    // Update user password
+    const user = await User.findById(request.user._id);
+    user.password = newPassword;
+    user.isFirstLogin = true; // Mark as first login to prompt password change
+    await user.save();
+
+    // Update request
+    request.status = 'completed';
+    // Note: PasswordResetRequest.completedBy references User, not Admin
+    // We'll store admin info in notes instead
+    request.completedAt = new Date();
+    request.newPassword = newPassword; // Store for reference
+    const adminNote = `Completed by admin: ${req.admin.username || req.admin.email}`;
+    request.notes = notes ? `${adminNote}\n${notes}` : adminNote;
+    await request.save();
+
+    console.log('✅ Admin completed password reset request:', {
+      requestId: request._id,
+      userId: user._id,
+      email: user.email,
+      adminId: req.admin.id
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Password reset completed successfully',
+      data: request
+    });
+  } catch (error) {
+    console.error('Complete password reset request error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error completing password reset request'
+    });
+  }
+};
+
+// @desc    Reject password reset request (for admin)
+// @route   PUT /api/admin/password-reset-requests/:id/reject
+// @access  Private (Admin)
+const rejectPasswordResetRequest = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { notes } = req.body;
+
+    const request = await PasswordResetRequest.findById(id).populate('user');
+
+    if (!request) {
+      return res.status(404).json({
+        success: false,
+        message: 'Password reset request not found'
+      });
+    }
+
+    if (request.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'This request has already been processed'
+      });
+    }
+
+    // Update request
+    request.status = 'rejected';
+    request.completedAt = new Date();
+    const adminNote = `Rejected by admin: ${req.admin.username || req.admin.email}`;
+    request.notes = notes ? `${adminNote}\nReason: ${notes}` : adminNote;
+    await request.save();
+
+    console.log('✅ Admin rejected password reset request:', {
+      requestId: request._id,
+      userId: request.user._id,
+      email: request.user.email
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Password reset request rejected successfully',
+      data: request
+    });
+  } catch (error) {
+    console.error('Reject password reset request error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error rejecting password reset request'
+    });
+  }
+};
+
 module.exports = {
   adminLogin,
   getPendingCompanies,
@@ -1070,5 +1273,9 @@ module.exports = {
   getCompanyUpdateRequests,
   getCompanyUpdateRequest,
   approveCompanyUpdateRequest,
-  rejectCompanyUpdateRequest
+  rejectCompanyUpdateRequest,
+  getPasswordResetRequests,
+  getPasswordResetRequest,
+  completePasswordResetRequest,
+  rejectPasswordResetRequest
 };

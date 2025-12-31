@@ -13,6 +13,7 @@ const getProducts = async (req, res) => {
       limit = 20,
       category,
       brand,
+      mainCategory,
       search,
       minPrice,
       maxPrice,
@@ -27,6 +28,11 @@ const getProducts = async (req, res) => {
     // Status filter - only apply if provided
     if (status && status !== 'all') {
       query.status = status;
+    }
+
+    // Main category filter
+    if (mainCategory && mainCategory !== 'all' && mainCategory !== 'All') {
+      query.mainCategory = mainCategory;
     }
 
     // Category filter
@@ -188,6 +194,11 @@ const createProduct = async (req, res) => {
       });
     }
 
+    // Set mainCategory from category if not provided
+    if (!req.body.mainCategory && category.mainCategory) {
+      req.body.mainCategory = category.mainCategory;
+    }
+
     // Check if SKU already exists
     const existingProduct = await Product.findOne({ sku: req.body.sku?.toUpperCase() });
     if (existingProduct) {
@@ -310,6 +321,10 @@ const updateProduct = async (req, res) => {
           success: false,
           message: 'Category not found'
         });
+      }
+      // Set mainCategory from category if not provided
+      if (!req.body.mainCategory && category.mainCategory) {
+        req.body.mainCategory = category.mainCategory;
       }
     }
 
@@ -582,6 +597,25 @@ const bulkImportProducts = async (req, res) => {
           continue;
         }
 
+        // Get mainCategory from row or use default from request
+        let mainCategory = row['Main Category'] ? row['Main Category'].toString().trim().toLowerCase() : null;
+        // Also check if it was sent as a form field (multer allows other fields in req.body)
+        if (!mainCategory) {
+          mainCategory = req.body.defaultMainCategory || req.body.mainCategory;
+        }
+        
+        // Validate mainCategory
+        const validMainCategories = ['medical', 'it-solutions', 'pharmacy', 'salon'];
+        if (!mainCategory || !validMainCategories.includes(mainCategory)) {
+          results.failed++;
+          results.errors.push({
+            row: rowNumber,
+            sku: row['SKU'] || 'N/A',
+            error: `Main Category is required and must be one of: ${validMainCategories.join(', ')}`
+          });
+          continue;
+        }
+
         // Validate that selling price is greater than cost price
         const sellingPrice = parseFloat(row['Price']) || 0;
         const costPrice = parseFloat(row['Cost Price']) || 0;
@@ -696,6 +730,7 @@ const bulkImportProducts = async (req, res) => {
           name: row['Product Name'].toString().trim(),
           brand: brandId,
           category: categoryId,
+          mainCategory: mainCategory,
           description: row['Description'] ? row['Description'].toString().trim() : '',
           price: parseFloat(row['Price']) || 0,
           pricing: {

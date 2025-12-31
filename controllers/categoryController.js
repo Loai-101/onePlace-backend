@@ -8,11 +8,16 @@ const XLSX = require('xlsx');
 // @access  Public
 const getCategories = async (req, res) => {
   try {
-    const { includeInactive = false } = req.query;
+    const { includeInactive = false, mainCategory } = req.query;
 
     let query = {};
     if (!includeInactive) {
       query.isActive = true;
+    }
+
+    // Main category filter
+    if (mainCategory && mainCategory !== 'all' && mainCategory !== 'All') {
+      query.mainCategory = mainCategory;
     }
 
     const categories = await Category.find(query)
@@ -438,6 +443,25 @@ const bulkImportCategories = async (req, res) => {
           continue;
         }
 
+        // Get mainCategory from row or use default from request
+        let mainCategory = row['Main Category'] ? row['Main Category'].toString().trim().toLowerCase() : null;
+        // Also check if it was sent as a form field (multer allows other fields in req.body)
+        if (!mainCategory) {
+          mainCategory = req.body.defaultMainCategory || req.body.mainCategory;
+        }
+
+        // Validate mainCategory
+        const validMainCategories = ['medical', 'it-solutions', 'pharmacy', 'salon'];
+        if (!mainCategory || !validMainCategories.includes(mainCategory)) {
+          results.failed++;
+          results.errors.push({
+            row: rowNumber,
+            categoryName: row['Category Name'],
+            error: `Invalid or missing Main Category. Must be one of: ${validMainCategories.join(', ')}`
+          });
+          continue;
+        }
+
         // Find brand by name
         const brandName = row['Brand Name'].toString().trim();
         const brandId = brandMap.get(brandName.toLowerCase());
@@ -472,6 +496,7 @@ const bulkImportCategories = async (req, res) => {
         const categoryData = {
           name: row['Category Name'].toString().trim(),
           brand: brandId,
+          mainCategory: mainCategory,
           description: row['Description'] ? row['Description'].toString().trim() : '',
           isActive: row['Is Active'] !== undefined ? (row['Is Active'].toString().toLowerCase() === 'true' || row['Is Active'] === 1) : true,
           image: row['Image URL'] ? {

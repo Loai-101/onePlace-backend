@@ -8,6 +8,12 @@ const brandSchema = new mongoose.Schema({
     trim: true,
     maxlength: [100, 'Brand name cannot exceed 100 characters']
   },
+  mainCategory: {
+    type: String,
+    enum: ['medical', 'it-solutions', 'pharmacy', 'salon'],
+    required: [true, 'Main category is required'],
+    trim: true
+  },
   description: {
     type: String,
     trim: true,
@@ -105,6 +111,7 @@ const brandSchema = new mongoose.Schema({
 
 // Index for better performance
 brandSchema.index({ name: 1 });
+brandSchema.index({ mainCategory: 1 }); // Index for main category filtering
 brandSchema.index({ isActive: 1 });
 brandSchema.index({ isFeatured: 1 });
 brandSchema.index({ sortOrder: 1 });

@@ -29,6 +29,7 @@ const userManagementRoutes = require('./routes/user-management');
 const uploadRoutes = require('./routes/upload');
 const accountRoutes = require('./routes/accounts');
 const calendarRoutes = require('./routes/calendar');
+const reportRoutes = require('./routes/reports');
 
 const app = express();
 
@@ -327,6 +328,7 @@ app.use('/api/user-management', userManagementRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/calendar', calendarRoutes);
+app.use('/api/reports', reportRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {

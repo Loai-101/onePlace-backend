@@ -25,6 +25,12 @@ const productSchema = new mongoose.Schema({
     ref: 'Category',
     required: [true, 'Category is required']
   },
+  mainCategory: {
+    type: String,
+    enum: ['medical', 'it-solutions', 'pharmacy', 'salon'],
+    required: [true, 'Main category is required'],
+    trim: true
+  },
   description: {
     type: String,
     trim: true,
@@ -163,6 +169,7 @@ const productSchema = new mongoose.Schema({
 productSchema.index({ name: 'text', description: 'text', sku: 'text' });
 productSchema.index({ brand: 1 });
 productSchema.index({ category: 1 });
+productSchema.index({ mainCategory: 1 }); // Index for main category filtering
 productSchema.index({ status: 1 });
 productSchema.index({ 'stock.current': 1 });
 productSchema.index({ price: 1 });
