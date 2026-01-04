@@ -325,6 +325,21 @@ const updateOrder = async (req, res) => {
     const isApproving = req.body.accountantReviewStatus === 'APPROVED' && 
                        order.accountantReviewStatus !== 'APPROVED';
     
+    // If accountant is updating accountantReviewStatus, sync it to status field for admin and salesman visibility
+    if (req.user.role === 'accountant' && req.body.accountantReviewStatus) {
+      // Map accountantReviewStatus to regular status
+      const statusMap = {
+        'PENDING_REVIEW': 'pending',
+        'UNDER_REVIEW': 'processing',
+        'APPROVED': 'confirmed',
+        'REJECTED': 'cancelled',
+        'CANCELLED': 'cancelled'
+      };
+      
+      // Update the regular status field to match accountantReviewStatus
+      req.body.status = statusMap[req.body.accountantReviewStatus] || order.status;
+    }
+    
     // Set updated by
     req.body.updatedBy = req.user.id;
 

@@ -6,11 +6,11 @@ To ensure the backend properly connects with the frontend on Vercel, you need to
 
 ### Variable: `ALLOWED_ORIGINS`
 
-**Value:** `https://one-place-frontend.vercel.app`
+**Value:** `https://oneplace.now`
 
 **Optional (for multiple origins):** If you have multiple frontend URLs, separate them with commas:
 ```
-https://one-place-frontend.vercel.app,https://another-frontend.vercel.app
+https://oneplace.now,https://one-place-frontend.vercel.app
 ```
 
 ## How to Set in Render
@@ -21,19 +21,20 @@ https://one-place-frontend.vercel.app,https://another-frontend.vercel.app
 4. Click **Add Environment Variable**
 5. Enter:
    - **Key:** `ALLOWED_ORIGINS`
-   - **Value:** `https://one-place-frontend.vercel.app`
+   - **Value:** `https://oneplace.now`
 6. Click **Save Changes**
 7. **Important:** Your service will automatically redeploy after saving
 
 ## Current Production URLs
 
-- **Frontend:** https://one-place-frontend.vercel.app/
-- **Backend:** https://oneplace-backend-0xjq.onrender.com
+- **Frontend:** https://oneplace.now/
+- **Backend:** https://oneplace.now
 
 ## How It Works
 
 The backend CORS configuration:
 - **Production:** Uses `ALLOWED_ORIGINS` environment variable if set, otherwise defaults to:
+  - `https://oneplace.now`
   - `https://one-place-frontend.vercel.app`
   - `https://*.vercel.app` (allows all Vercel preview deployments)
 - **Development:** Allows localhost origins (5173, 5174, 3000)
@@ -52,7 +53,7 @@ After setting the environment variable and redeploying:
 
 **Solution:**
 1. Verify `ALLOWED_ORIGINS` is set correctly in Render
-2. Ensure the value matches exactly: `https://one-place-frontend.vercel.app`
+2. Ensure the value matches exactly: `https://oneplace.now`
 3. Check that the service has been redeployed after setting the variable
 4. Clear browser cache and try again
 
@@ -65,8 +66,8 @@ The backend automatically allows all `*.vercel.app` domains for preview deployme
 
 **Solution:**
 1. Check Render service status
-2. Verify the backend URL is correct: `https://oneplace-backend-0xjq.onrender.com`
-3. Test the health endpoint: `https://oneplace-backend-0xjq.onrender.com/health`
+2. Verify the backend URL is correct: `https://oneplace.now`
+3. Test the health endpoint: `https://oneplace.now/health`
 
 ### Issue: 429 Rate Limit Errors
 

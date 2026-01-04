@@ -31,6 +31,7 @@ const accountRoutes = require('./routes/accounts');
 const calendarRoutes = require('./routes/calendar');
 const reportRoutes = require('./routes/reports');
 const userActivityRoutes = require('./routes/userActivity');
+const dashboardRoutes = require('./routes/dashboard');
 
 const app = express();
 
@@ -48,6 +49,7 @@ const localhostOrigins = [
 const productionOrigins = process.env.ALLOWED_ORIGINS 
   ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
   : [
+      'https://oneplace.now',
       'https://one-place-frontend.vercel.app',
       'https://*.vercel.app' // Allow all Vercel preview deployments
     ];
@@ -100,6 +102,7 @@ app.options('*', cors({
     // Production origins
     const productionOrigins = process.env.NODE_ENV === 'production'
       ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()) : [
+          'https://oneplace.now',
           'https://one-place-frontend.vercel.app',
           /^https:\/\/.*\.vercel\.app$/
         ])
@@ -331,6 +334,7 @@ app.use('/api/accounts', accountRoutes);
 app.use('/api/calendar', calendarRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/user-activity', userActivityRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {

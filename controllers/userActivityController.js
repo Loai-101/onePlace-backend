@@ -80,18 +80,37 @@ exports.trackPageVisit = async (req, res) => {
       })
     }
     
-    // Add page to existing session
-    activeSession.pages.push({
-      page,
-      visitedAt: new Date(),
-      duration: duration || 0
-    })
+    // Check if this page was already visited in this session (avoid duplicates for same page)
+    const existingPage = activeSession.pages.find(p => p.page === page)
     
-    await activeSession.save()
+    if (existingPage) {
+      // Update the existing page entry with new visit time and duration
+      existingPage.visitedAt = new Date()
+      existingPage.duration = (existingPage.duration || 0) + (duration || 0)
+    } else {
+      // Add new page to existing session
+      activeSession.pages.push({
+        page,
+        visitedAt: new Date(),
+        duration: duration || 0
+      })
+    }
+    
+    // Mark as modified to ensure Mongoose saves the changes to the pages array
+    activeSession.markModified('pages')
+    
+    // Save and verify
+    const savedActivity = await activeSession.save()
+    
+    // Verify pages were saved
+    const verifyActivity = await UserActivity.findById(savedActivity._id)
+    console.log(`✅ Page visit tracked: User ${userId}, Page: ${page}, Total pages: ${verifyActivity.pages.length}`)
+    console.log(`📄 Pages in database:`, verifyActivity.pages.map(p => p.page).join(', '))
     
     res.json({
       success: true,
-      data: activeSession
+      data: savedActivity,
+      message: `Page visit tracked. Total pages: ${verifyActivity.pages.length}`
     })
   } catch (error) {
     console.error('Error tracking page visit:', error)
@@ -209,10 +228,20 @@ exports.getUserActivity = async (req, res) => {
         }
       }
       
-      // Get unique pages visited
-      const uniquePages = activity.pages && Array.isArray(activity.pages) && activity.pages.length > 0
-        ? [...new Set(activity.pages.map(p => p.page || p).filter(Boolean))]
-        : []
+      // Get unique pages visited - ensure pages array exists and is properly formatted
+      let uniquePages = []
+      if (activity.pages && Array.isArray(activity.pages) && activity.pages.length > 0) {
+        // Extract page names from the pages array
+        uniquePages = [...new Set(activity.pages.map(p => {
+          // Handle both object format {page: "PageName"} and string format
+          if (typeof p === 'object' && p !== null) {
+            return p.page || p.name || String(p)
+          }
+          return String(p)
+        }).filter(Boolean))]
+      }
+      
+      console.log(`📊 Activity ${activity._id}: ${uniquePages.length} pages - ${uniquePages.join(', ') || 'none'}`)
       
       return {
         id: activity._id,

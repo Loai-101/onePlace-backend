@@ -222,14 +222,37 @@ const orderSchema = new mongoose.Schema({
 // Index for better performance
 orderSchema.index({ orderNumber: 1 });
 orderSchema.index({ 'customer.company': 1 });
+
+// Pre-save hook to sync accountantReviewStatus to status field
+// This ensures admin and salesman roles see the updated status when accountant updates it
+orderSchema.pre('save', function(next) {
+  // Only sync if accountantReviewStatus is being modified and status is not explicitly set
+  if (this.isModified('accountantReviewStatus') && this.accountantReviewStatus) {
+    // Map accountantReviewStatus to regular status
+    const statusMap = {
+      'PENDING_REVIEW': 'pending',
+      'UNDER_REVIEW': 'processing',
+      'APPROVED': 'confirmed',
+      'REJECTED': 'cancelled',
+      'CANCELLED': 'cancelled'
+    };
+    
+    // Update status field to match accountantReviewStatus (unless status was explicitly modified)
+    if (!this.isModified('status') || this.status === this.constructor.schema.paths.status.defaultValue) {
+      this.status = statusMap[this.accountantReviewStatus] || this.status;
+    }
+  }
+  next();
+});
 orderSchema.index({ status: 1 });
 orderSchema.index({ orderType: 1 });
 orderSchema.index({ 'payment.method': 1 });
 orderSchema.index({ orderStatus: 1 });
 orderSchema.index({ createdAt: -1 });
 
-// Pre-save middleware to generate order number
+// Pre-save middleware to generate order number and sync accountantReviewStatus to status
 orderSchema.pre('save', async function(next) {
+  // Generate order number for new orders
   if (this.isNew && !this.orderNumber) {
     const count = await this.constructor.countDocuments();
     const date = new Date();
@@ -238,6 +261,26 @@ orderSchema.pre('save', async function(next) {
     const day = String(date.getDate()).padStart(2, '0');
     this.orderNumber = `ORD-${year}${month}${day}-${String(count + 1).padStart(4, '0')}`;
   }
+  
+  // Sync accountantReviewStatus to status field when accountantReviewStatus is modified
+  // This ensures admin and salesman roles see the updated status when accountant updates it
+  if (this.isModified('accountantReviewStatus') && this.accountantReviewStatus) {
+    // Map accountantReviewStatus to regular status
+    const statusMap = {
+      'PENDING_REVIEW': 'pending',
+      'UNDER_REVIEW': 'processing',
+      'APPROVED': 'confirmed',
+      'REJECTED': 'cancelled',
+      'CANCELLED': 'cancelled'
+    };
+    
+    // Update status field to match accountantReviewStatus (unless status was explicitly modified in the same operation)
+    const mappedStatus = statusMap[this.accountantReviewStatus];
+    if (mappedStatus && (!this.isModified('status') || this.status === 'pending')) {
+      this.status = mappedStatus;
+    }
+  }
+  
   next();
 });
 
