@@ -424,6 +424,11 @@ const getDatabaseStatus = async (req, res) => {
 // @access  Public
 const registerCompany = async (req, res) => {
   try {
+    console.log('📥 Received registration request:', {
+      body: req.body,
+      headers: req.headers
+    });
+
     const {
       // Company Information
       companyName,
@@ -451,6 +456,61 @@ const registerCompany = async (req, res) => {
       ownerUsername,
       ownerPassword
     } = req.body;
+
+    // Validate required fields
+    const requiredFields = {
+      companyName,
+      companyEmail,
+      companyPhone,
+      ibanNumber,
+      bankName,
+      vatNumber,
+      crNumber,
+      companyType,
+      dueDate,
+      companySize,
+      businessTarget,
+      numberOfUsers,
+      companyAddress,
+      companyCity,
+      companyCountry: companyCountry || 'Bahrain',
+      postalCode,
+      ownerName,
+      ownerEmail,
+      ownerUsername,
+      ownerPassword
+    };
+
+    const missingFields = Object.entries(requiredFields)
+      .filter(([key, value]) => !value || (typeof value === 'string' && !value.trim()))
+      .map(([key]) => key);
+
+    if (missingFields.length > 0) {
+      console.log('❌ Missing required fields:', missingFields);
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields',
+        errors: missingFields.map(field => `${field} is required`)
+      });
+    }
+
+    // Convert numberOfUsers to number
+    const numUsers = parseInt(numberOfUsers, 10);
+    if (isNaN(numUsers) || numUsers < 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Number of users must be a valid number and at least 1'
+      });
+    }
+
+    // Validate dueDate
+    const dueDateObj = new Date(dueDate);
+    if (isNaN(dueDateObj.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid due date format'
+      });
+    }
 
     // Check if company name already exists
     const existingCompanyName = await Company.findOne({ name: companyName });
@@ -492,29 +552,36 @@ const registerCompany = async (req, res) => {
     console.log('✅ Username is unique:', ownerUsername);
 
     // Create the company
-    const company = await Company.create({
-      name: companyName,
-      email: companyEmail,
-      phone: companyPhone,
-      ibanNumber,
-      bankName,
-      vatNumber,
-      crNumber,
-      companyType,
-      dueDate: new Date(dueDate),
-      companySize,
-      businessTarget,
-      numberOfUsers,
-      address: companyAddress,
-      city: companyCity,
-      country: companyCountry,
-      postalCode,
-      ownerName,
-      ownerEmail,
-      ownerUsername,
+    const companyData = {
+      name: companyName.trim(),
+      email: companyEmail.trim().toLowerCase(),
+      phone: companyPhone.trim(),
+      ibanNumber: ibanNumber.trim().toUpperCase(),
+      bankName: bankName.trim(),
+      vatNumber: vatNumber.trim(),
+      crNumber: crNumber.trim(),
+      companyType: companyType.trim(),
+      dueDate: dueDateObj,
+      companySize: companySize.trim(),
+      businessTarget: businessTarget.trim(),
+      numberOfUsers: numUsers,
+      address: companyAddress.trim(),
+      city: companyCity.trim(),
+      country: (companyCountry || 'Bahrain').trim(),
+      postalCode: postalCode.trim(),
+      ownerName: ownerName.trim(),
+      ownerEmail: ownerEmail.trim().toLowerCase(),
+      ownerUsername: ownerUsername.trim(),
       ownerPassword: ownerPassword, // Store plain password, will be hashed by User model
       status: 'pending'
+    };
+
+    console.log('📝 Creating company with data:', {
+      ...companyData,
+      ownerPassword: '***hidden***'
     });
+
+    const company = await Company.create(companyData);
 
     // Create the company owner user (password will be hashed by User model's pre-save hook)
     console.log('👤 Creating company owner user with:', {
