@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const Company = require('../models/Company');
 const PasswordResetRequest = require('../models/PasswordResetRequest');
+const UserActivity = require('../models/UserActivity');
 const { sendTokenResponse } = require('../middleware/auth');
 
 // @desc    Register user (owner or other roles)
@@ -269,6 +270,25 @@ const login = async (req, res) => {
       }
     }
 
+    // Track login activity (non-blocking)
+    try {
+      const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
+      const userAgent = req.headers['user-agent']
+      
+      await UserActivity.create({
+        user: user._id,
+        company: user.company?._id || user.company,
+        loginTime: new Date(),
+        ipAddress,
+        userAgent,
+        isActive: true,
+        pages: []
+      })
+    } catch (activityError) {
+      // Don't fail login if activity tracking fails
+      console.error('Error tracking login activity:', activityError)
+    }
+
     sendTokenResponse(user, 200, res);
   } catch (error) {
     console.error('Login error:', error);
@@ -283,6 +303,28 @@ const login = async (req, res) => {
 // @route   GET /api/auth/logout
 // @access  Private
 const logout = async (req, res) => {
+  // Track logout activity (non-blocking)
+  try {
+    if (req.user && req.user.id) {
+      const activeSession = await UserActivity.findOne({
+        user: req.user.id,
+        isActive: true
+      }).sort({ loginTime: -1 })
+      
+      if (activeSession) {
+        activeSession.logoutTime = new Date()
+        activeSession.isActive = false
+        if (activeSession.loginTime) {
+          activeSession.sessionDuration = Math.floor((new Date() - activeSession.loginTime) / 1000)
+        }
+        await activeSession.save()
+      }
+    }
+  } catch (activityError) {
+    // Don't fail logout if activity tracking fails
+    console.error('Error tracking logout activity:', activityError)
+  }
+
   res.cookie('token', 'none', {
     expires: new Date(Date.now() + 10 * 1000),
     httpOnly: true

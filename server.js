@@ -30,6 +30,7 @@ const uploadRoutes = require('./routes/upload');
 const accountRoutes = require('./routes/accounts');
 const calendarRoutes = require('./routes/calendar');
 const reportRoutes = require('./routes/reports');
+const userActivityRoutes = require('./routes/userActivity');
 
 const app = express();
 
@@ -329,6 +330,7 @@ app.use('/api/upload', uploadRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/calendar', calendarRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/user-activity', userActivityRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {
