@@ -4,7 +4,7 @@ const User = require('../models/User')
 // Track user login
 exports.trackLogin = async (req, res) => {
   try {
-    const userId = req.user.id
+    const userId = req.user._id || req.user.id
     const companyId = req.user.company
     
     // Get IP address and user agent
@@ -38,8 +38,15 @@ exports.trackLogin = async (req, res) => {
 // Track page visit
 exports.trackPageVisit = async (req, res) => {
   try {
-    const userId = req.user.id
+    const userId = req.user._id || req.user.id
     const { page, duration } = req.body
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated'
+      })
+    }
     
     if (!page) {
       return res.status(400).json({
@@ -57,6 +64,13 @@ exports.trackPageVisit = async (req, res) => {
     if (!activeSession) {
       // If no active session, create a new one (user might have refreshed)
       const companyId = req.user.company
+      
+      if (!companyId) {
+        return res.status(400).json({
+          success: false,
+          message: 'User company not found'
+        })
+      }
       const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
       const userAgent = req.headers['user-agent']
       
@@ -80,8 +94,13 @@ exports.trackPageVisit = async (req, res) => {
       })
     }
     
+    // Ensure pages array exists
+    if (!activeSession.pages || !Array.isArray(activeSession.pages)) {
+      activeSession.pages = []
+    }
+    
     // Check if this page was already visited in this session (avoid duplicates for same page)
-    const existingPage = activeSession.pages.find(p => p.page === page)
+    const existingPage = activeSession.pages.find(p => p && p.page === page)
     
     if (existingPage) {
       // Update the existing page entry with new visit time and duration
@@ -114,9 +133,16 @@ exports.trackPageVisit = async (req, res) => {
     })
   } catch (error) {
     console.error('Error tracking page visit:', error)
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      userId: req.user?._id || req.user?.id,
+      page: req.body?.page
+    })
     res.status(500).json({
       success: false,
-      message: 'Error tracking page visit'
+      message: 'Error tracking page visit',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     })
   }
 }
@@ -124,7 +150,7 @@ exports.trackPageVisit = async (req, res) => {
 // Track user logout
 exports.trackLogout = async (req, res) => {
   try {
-    const userId = req.user.id
+    const userId = req.user._id || req.user.id
     
     // Find the most recent active session
     const activeSession = await UserActivity.findOne({
