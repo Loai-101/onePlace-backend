@@ -37,48 +37,55 @@ const marketingRoutes = require('./routes/marketing');
 const app = express();
 
 // CORS configuration - MUST be before other middleware
-// Simplified and robust CORS configuration
+// Always allow localhost for local development, even in production mode
+const localhostOrigins = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+  'http://127.0.0.1:3000'
+];
+
+const productionOrigins = process.env.ALLOWED_ORIGINS 
+  ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
+  : [
+      'https://oneplace.now',
+      'https://one-place-frontend.vercel.app',
+      'https://*.vercel.app' // Allow all Vercel preview deployments
+    ];
+
+const allowedOrigins = process.env.NODE_ENV === 'production' 
+  ? [...productionOrigins, ...localhostOrigins] // Include localhost even in production for local dev
+  : localhostOrigins;
+
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (mobile apps, Postman, etc.)
-    if (!origin) {
+    if (!origin) return callback(null, true);
+    
+    // Check exact match
+    if (allowedOrigins.indexOf(origin) !== -1) {
       return callback(null, true);
     }
     
-    // Always allow these origins
-    const alwaysAllowed = [
-      'https://oneplace.now',
-      'https://one-place-frontend.vercel.app',
-      'http://localhost:5173',
-      'http://localhost:5174',
-      'http://localhost:3000',
-      'http://127.0.0.1:5173',
-      'http://127.0.0.1:5174',
-      'http://127.0.0.1:3000'
-    ];
-    
-    // Check if origin is in always allowed list
-    if (alwaysAllowed.includes(origin)) {
-      return callback(null, true);
-    }
-    
-    // Check environment variable for additional origins
-    if (process.env.ALLOWED_ORIGINS) {
-      const envOrigins = process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim());
-      if (envOrigins.includes(origin)) {
-        return callback(null, true);
+    // Check wildcard patterns (for Vercel preview deployments)
+    const isAllowed = allowedOrigins.some(allowedOrigin => {
+      if (allowedOrigin.includes('*')) {
+        const pattern = allowedOrigin.replace(/\*/g, '.*');
+        const regex = new RegExp(`^${pattern}$`);
+        return regex.test(origin);
       }
-    }
+      return false;
+    });
     
-    // Allow Vercel preview deployments
-    if (origin.match(/^https:\/\/.*\.vercel\.app$/)) {
-      return callback(null, true);
+    if (isAllowed || allowedOrigins.length === 0) {
+      callback(null, true);
+    } else {
+      console.warn(`CORS blocked origin: ${origin}`);
+      console.warn(`Allowed origins:`, allowedOrigins);
+      callback(new Error(`Not allowed by CORS. Origin: ${origin}`));
     }
-    
-    // Default: allow the request (permissive for now to avoid blocking)
-    // In production, you might want to be more restrictive
-    console.log(`CORS: Allowing origin: ${origin}`);
-    callback(null, true);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
@@ -91,14 +98,19 @@ app.use(cors({
 app.options('*', cors({
   origin: (origin, callback) => {
     // Allow requests with no origin
-    if (!origin) {
-      return callback(null, true);
-    }
+    if (!origin) return callback(null, true);
     
-    // Always allow these origins
-    const alwaysAllowed = [
-      'https://oneplace.now',
-      'https://one-place-frontend.vercel.app',
+    // Production origins
+    const productionOrigins = process.env.NODE_ENV === 'production'
+      ? (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()) : [
+          'https://oneplace.now',
+          'https://one-place-frontend.vercel.app',
+          /^https:\/\/.*\.vercel\.app$/
+        ])
+      : [];
+    
+    // Development origins
+    const devOrigins = [
       'http://localhost:5173',
       'http://localhost:5174',
       'http://localhost:3000',
@@ -107,25 +119,19 @@ app.options('*', cors({
       'http://127.0.0.1:3000'
     ];
     
-    if (alwaysAllowed.includes(origin)) {
-      return callback(null, true);
-    }
+    const allOrigins = process.env.NODE_ENV === 'production' 
+      ? [...productionOrigins, ...devOrigins]
+      : devOrigins;
     
-    // Check environment variable
-    if (process.env.ALLOWED_ORIGINS) {
-      const envOrigins = process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim());
-      if (envOrigins.includes(origin)) {
-        return callback(null, true);
+    // Check if origin matches
+    const isAllowed = allOrigins.some(allowed => {
+      if (allowed instanceof RegExp) {
+        return allowed.test(origin);
       }
-    }
+      return allowed === origin;
+    });
     
-    // Allow Vercel preview deployments
-    if (origin.match(/^https:\/\/.*\.vercel\.app$/)) {
-      return callback(null, true);
-    }
-    
-    // Default: allow
-    callback(null, true);
+    callback(null, isAllowed);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],

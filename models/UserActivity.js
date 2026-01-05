@@ -10,7 +10,7 @@ const userActivitySchema = new mongoose.Schema({
   company: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Company',
-    required: false, // Made optional to support users without companies
+    required: [true, 'Company is required'],
     index: true
   },
   loginTime: {

@@ -5,7 +5,7 @@ const User = require('../models/User')
 exports.trackLogin = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id
-    const companyId = req.user.company || null
+    const companyId = req.user.company
     
     // Get IP address and user agent
     const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
@@ -56,43 +56,21 @@ exports.trackPageVisit = async (req, res) => {
     }
     
     // Find the most recent active session for this user
-    // Use lean() to get a plain object and avoid document state issues
-    let activeSession = await UserActivity.findOne({
+    const activeSession = await UserActivity.findOne({
       user: userId,
       isActive: true
     }).sort({ loginTime: -1 })
     
     if (!activeSession) {
       // If no active session, create a new one (user might have refreshed)
-      const companyId = req.user.company || null
-      const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
-      const userAgent = req.headers['user-agent']
+      const companyId = req.user.company
       
-      const newActivity = await UserActivity.create({
-        user: userId,
-        company: companyId, // Can be null if user doesn't have a company
-        loginTime: new Date(),
-        ipAddress,
-        userAgent,
-        isActive: true,
-        pages: [{
-          page,
-          visitedAt: new Date(),
-          duration: duration || 0
-        }]
-      })
-      
-      return res.status(201).json({
-        success: true,
-        data: newActivity
-      })
-    }
-    
-    // Reload session to get latest state (handles concurrent updates)
-    activeSession = await UserActivity.findById(activeSession._id)
-    if (!activeSession) {
-      // Session was deleted, create a new one
-      const companyId = req.user.company || null
+      if (!companyId) {
+        return res.status(400).json({
+          success: false,
+          message: 'User company not found'
+        })
+      }
       const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
       const userAgent = req.headers['user-agent']
       
@@ -112,11 +90,7 @@ exports.trackPageVisit = async (req, res) => {
       
       return res.status(201).json({
         success: true,
-        data: {
-          _id: newActivity._id,
-          pages: newActivity.pages || []
-        },
-        message: 'Page visit tracked successfully'
+        data: newActivity
       })
     }
     
@@ -125,13 +99,13 @@ exports.trackPageVisit = async (req, res) => {
       activeSession.pages = []
     }
     
-    // Check if this page was already visited in this session
-    const existingPageIndex = activeSession.pages.findIndex(p => p && p.page === page)
+    // Check if this page was already visited in this session (avoid duplicates for same page)
+    const existingPage = activeSession.pages.find(p => p && p.page === page)
     
-    if (existingPageIndex >= 0) {
-      // Update existing page entry
-      activeSession.pages[existingPageIndex].visitedAt = new Date()
-      activeSession.pages[existingPageIndex].duration = (activeSession.pages[existingPageIndex].duration || 0) + (duration || 0)
+    if (existingPage) {
+      // Update the existing page entry with new visit time and duration
+      existingPage.visitedAt = new Date()
+      existingPage.duration = (existingPage.duration || 0) + (duration || 0)
     } else {
       // Add new page to existing session
       activeSession.pages.push({
@@ -141,81 +115,34 @@ exports.trackPageVisit = async (req, res) => {
       })
     }
     
-    // Mark as modified to ensure Mongoose saves the changes
+    // Mark as modified to ensure Mongoose saves the changes to the pages array
     activeSession.markModified('pages')
     
-    // Save with error handling
+    // Save and verify
     const savedActivity = await activeSession.save()
     
-    res.json({
-      success: true,
-      data: {
-        _id: savedActivity._id,
-        pages: savedActivity.pages || []
-      },
-      message: 'Page visit tracked successfully'
-    })
+    // Verify pages were saved
+    const verifyActivity = await UserActivity.findById(savedActivity._id)
+    console.log(`✅ Page visit tracked: User ${userId}, Page: ${page}, Total pages: ${verifyActivity.pages.length}`)
+    console.log(`📄 Pages in database:`, verifyActivity.pages.map(p => p.page).join(', '))
     
     res.json({
       success: true,
-      data: {
-        _id: savedActivity._id,
-        pages: savedActivity.pages || []
-      },
-      message: `Page visit tracked successfully`
+      data: savedActivity,
+      message: `Page visit tracked. Total pages: ${verifyActivity.pages.length}`
     })
   } catch (error) {
-    // Log detailed error information
-    const errorDetails = {
+    console.error('Error tracking page visit:', error)
+    console.error('Error details:', {
       message: error.message,
-      name: error.name,
-      code: error.code,
+      stack: error.stack,
       userId: req.user?._id || req.user?.id,
-      companyId: req.user?.company,
       page: req.body?.page
-    }
-    
-    console.error('Error tracking page visit:', errorDetails)
-    
-    // Log full stack in development
-    if (process.env.NODE_ENV === 'development') {
-      console.error('Stack trace:', error.stack)
-    }
-    
-    // Handle specific error types
-    if (error.name === 'ValidationError') {
-      const errors = Object.values(error.errors || {}).map(e => e.message)
-      console.error('Validation errors:', errors)
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error',
-        errors: errors
-      })
-    }
-    
-    // Handle duplicate key errors (race conditions)
-    if (error.code === 11000) {
-      console.error('Duplicate key error - possible race condition')
-      // Try to return success anyway since the page was likely tracked
-      return res.json({
-        success: true,
-        message: 'Page visit may have been tracked (duplicate request)'
-      })
-    }
-    
-    // Handle cast errors
-    if (error.name === 'CastError') {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid data format'
-      })
-    }
-    
-    // Generic error response
+    })
     res.status(500).json({
       success: false,
       message: 'Error tracking page visit',
-      ...(process.env.NODE_ENV === 'development' && { error: error.message })
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     })
   }
 }
