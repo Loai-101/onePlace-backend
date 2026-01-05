@@ -5,7 +5,7 @@ const User = require('../models/User')
 exports.trackLogin = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id
-    const companyId = req.user.company
+    const companyId = req.user.company || null
     
     // Get IP address and user agent
     const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
@@ -63,20 +63,13 @@ exports.trackPageVisit = async (req, res) => {
     
     if (!activeSession) {
       // If no active session, create a new one (user might have refreshed)
-      const companyId = req.user.company
-      
-      if (!companyId) {
-        return res.status(400).json({
-          success: false,
-          message: 'User company not found'
-        })
-      }
+      const companyId = req.user.company || null
       const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
       const userAgent = req.headers['user-agent']
       
       const newActivity = await UserActivity.create({
         user: userId,
-        company: companyId,
+        company: companyId, // Can be null if user doesn't have a company
         loginTime: new Date(),
         ipAddress,
         userAgent,
@@ -136,9 +129,22 @@ exports.trackPageVisit = async (req, res) => {
     console.error('Error details:', {
       message: error.message,
       stack: error.stack,
+      name: error.name,
       userId: req.user?._id || req.user?.id,
-      page: req.body?.page
+      companyId: req.user?.company,
+      page: req.body?.page,
+      body: req.body
     })
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors: Object.values(error.errors).map(e => e.message)
+      })
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Error tracking page visit',
