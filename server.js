@@ -32,6 +32,7 @@ const calendarRoutes = require('./routes/calendar');
 const reportRoutes = require('./routes/reports');
 const userActivityRoutes = require('./routes/userActivity');
 const dashboardRoutes = require('./routes/dashboard');
+const marketingRoutes = require('./routes/marketing');
 
 const app = express();
 
@@ -333,6 +334,7 @@ app.use('/api/upload', uploadRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/calendar', calendarRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/marketing', marketingRoutes);
 app.use('/api/user-activity', userActivityRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 

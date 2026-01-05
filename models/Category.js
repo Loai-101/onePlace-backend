@@ -9,7 +9,7 @@ const categorySchema = new mongoose.Schema({
   },
   mainCategory: {
     type: String,
-    enum: ['medical', 'it-solutions', 'pharmacy', 'salon'],
+    enum: ['medical', 'it-solutions', 'pharmacy', 'salon', 'order-product'],
     required: [true, 'Main category is required'],
     trim: true
   },
