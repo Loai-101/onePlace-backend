@@ -55,14 +55,24 @@ const productionOrigins = process.env.ALLOWED_ORIGINS
       'https://*.vercel.app' // Allow all Vercel preview deployments
     ];
 
+// Always include oneplace.now if not already in the list
+if (!productionOrigins.includes('https://oneplace.now')) {
+  productionOrigins.push('https://oneplace.now');
+}
+
 const allowedOrigins = process.env.NODE_ENV === 'production' 
   ? [...productionOrigins, ...localhostOrigins] // Include localhost even in production for local dev
-  : localhostOrigins;
+  : [...productionOrigins, ...localhostOrigins]; // Include production origins in all environments
 
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (mobile apps, Postman, etc.)
     if (!origin) return callback(null, true);
+    
+    // Always allow oneplace.now in production
+    if (origin === 'https://oneplace.now') {
+      return callback(null, true);
+    }
     
     // Check exact match
     if (allowedOrigins.indexOf(origin) !== -1) {
@@ -84,6 +94,7 @@ app.use(cors({
     } else {
       console.warn(`CORS blocked origin: ${origin}`);
       console.warn(`Allowed origins:`, allowedOrigins);
+      console.warn(`NODE_ENV:`, process.env.NODE_ENV);
       callback(new Error(`Not allowed by CORS. Origin: ${origin}`));
     }
   },
@@ -99,6 +110,11 @@ app.options('*', cors({
   origin: (origin, callback) => {
     // Allow requests with no origin
     if (!origin) return callback(null, true);
+    
+    // Always allow oneplace.now
+    if (origin === 'https://oneplace.now') {
+      return callback(null, true);
+    }
     
     // Production origins
     const productionOrigins = process.env.NODE_ENV === 'production'
