@@ -10,7 +10,6 @@ const productSchema = new mongoose.Schema({
   sku: {
     type: String,
     required: [true, 'SKU is required'],
-    unique: true,
     trim: true,
     uppercase: true,
     maxlength: [50, 'SKU cannot exceed 50 characters']
@@ -160,6 +159,12 @@ const productSchema = new mongoose.Schema({
       default: 0,
       min: [0, 'Review count cannot be negative']
     }
+  },
+  company: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: [true, 'Company is required'],
+    index: true
   }
 }, {
   timestamps: true
@@ -174,6 +179,8 @@ productSchema.index({ status: 1 });
 productSchema.index({ 'stock.current': 1 });
 productSchema.index({ price: 1 });
 productSchema.index({ isFeatured: 1 });
+productSchema.index({ company: 1 }); // Index for company filtering
+productSchema.index({ sku: 1, company: 1 }, { unique: true }); // SKU must be unique per company
 
 // Virtual for stock status
 productSchema.virtual('stockStatus').get(function() {

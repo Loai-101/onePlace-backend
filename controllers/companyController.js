@@ -745,6 +745,24 @@ const getMyCompany = async (req, res) => {
       });
     }
 
+    // Ensure modules are initialized for existing companies (migration)
+    if (!company.modules) {
+      company.modules = {
+        dashboard: true,
+        menu: true,
+        products: true,
+        categories: true,
+        brands: true,
+        users: true,
+        accounts: true,
+        calendar: true,
+        reports: true,
+        marketing: true,
+        settings: true
+      };
+      await company.save();
+    }
+
     // Check for pending update requests
     const pendingRequest = await CompanyUpdateRequest.findOne({
       company: req.user.company,
@@ -855,6 +873,131 @@ const updateMyCompany = async (req, res) => {
   }
 };
 
+// Helper function to ensure company has modules initialized (migration for existing companies)
+const ensureCompanyModules = async (company) => {
+  if (!company.modules) {
+    company.modules = {
+      dashboard: true,
+      menu: true,
+      products: true,
+      categories: true,
+      brands: true,
+      users: true,
+      accounts: true,
+      calendar: true,
+      reports: true,
+      marketing: true,
+      settings: true
+    };
+    await company.save();
+  }
+  return company.modules;
+};
+
+// @desc    Get company modules
+// @route   GET /api/companies/me/modules
+// @access  Private
+const getCompanyModules = async (req, res) => {
+  try {
+    if (!req.user.company) {
+      return res.status(404).json({
+        success: false,
+        message: 'User is not associated with a company'
+      });
+    }
+
+    const company = await Company.findById(req.user.company);
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    // Ensure modules are initialized (for existing companies)
+    const modules = await ensureCompanyModules(company);
+
+    res.status(200).json({
+      success: true,
+      data: modules
+    });
+  } catch (error) {
+    console.error('Get company modules error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching company modules'
+    });
+  }
+};
+
+// @desc    Update company modules
+// @route   PUT /api/companies/me/modules
+// @access  Private (Owner/Admin)
+const updateCompanyModules = async (req, res) => {
+  try {
+    if (!req.user.company) {
+      return res.status(404).json({
+        success: false,
+        message: 'User is not associated with a company'
+      });
+    }
+
+    // Check if user has permission (owner or admin role)
+    if (req.user.role !== 'owner' && req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only owners and admins can update company modules'
+      });
+    }
+
+    const company = await Company.findById(req.user.company);
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    // Ensure modules exist before updating
+    await ensureCompanyModules(company);
+
+    // Update modules
+    if (req.body.modules) {
+      Object.keys(req.body.modules).forEach(moduleKey => {
+        if (company.modules[moduleKey] !== undefined) {
+          company.modules[moduleKey] = req.body.modules[moduleKey];
+        }
+      });
+      await company.save();
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Company modules updated successfully',
+      data: company.modules
+    });
+  } catch (error) {
+    console.error('Update company modules error:', error);
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors: errors
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error updating company modules'
+    });
+  }
+};
+
 module.exports = {
   getCompanies,
   getCompany,
@@ -869,5 +1012,7 @@ module.exports = {
   updateEmployee,
   removeEmployee,
   registerCompany,
-  getDatabaseStatus
+  getDatabaseStatus,
+  getCompanyModules,
+  updateCompanyModules
 };

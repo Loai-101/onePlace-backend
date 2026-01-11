@@ -43,14 +43,14 @@ const uploadExcel = upload.single('excelFile');
 
 const router = express.Router();
 
-// Public routes
+// All routes require authentication (categories are company-specific)
+router.use(protect);
+
+// Public authenticated routes (all users with company can access)
 router.get('/', getCategories);
 router.get('/tree', getCategoryTree);
 router.get('/:id', validateObjectId('id'), getCategory);
 router.get('/:id/products', validateObjectId('id'), validatePagination, getCategoryProducts);
-
-// Protected routes
-router.use(protect);
 
 // Owner/Admin only routes
 router.post('/', authorize('owner', 'admin'), validateCategory, createCategory);

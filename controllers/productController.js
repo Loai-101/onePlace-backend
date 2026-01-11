@@ -25,6 +25,15 @@ const getProducts = async (req, res) => {
     // Build query
     let query = {};
 
+    // Filter by company - CRITICAL for data isolation
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+    query.company = req.user.company;
+
     // Status filter - only apply if provided
     if (status && status !== 'all') {
       query.status = status;
@@ -87,9 +96,9 @@ const getProducts = async (req, res) => {
     // Get total count for pagination
     const total = await Product.countDocuments(query);
 
-    // Get unique categories and brands for filters
-    const categories = await Category.find({ isActive: true }).select('name _id brand');
-    const brands = await Brand.find({ isActive: true }).select('name _id');
+    // Get unique categories and brands for filters (filtered by company)
+    const categories = await Category.find({ isActive: true, company: req.user.company }).select('name _id brand');
+    const brands = await Brand.find({ isActive: true, company: req.user.company }).select('name _id');
 
     res.status(200).json({
       success: true,
@@ -128,6 +137,14 @@ const getProduct = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Product not found'
+      });
+    }
+
+    // Verify product belongs to user's company
+    if (req.user && req.user.company && product.company.toString() !== req.user.company.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Product does not belong to your company.'
       });
     }
 
@@ -178,11 +195,27 @@ const createProduct = async (req, res) => {
       });
     }
 
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
     const brand = await Brand.findById(req.body.brand);
     if (!brand) {
       return res.status(400).json({
         success: false,
         message: 'Brand not found'
+      });
+    }
+
+    // Verify brand belongs to user's company
+    if (brand.company.toString() !== req.user.company.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Brand does not belong to your company.'
       });
     }
 
@@ -194,17 +227,28 @@ const createProduct = async (req, res) => {
       });
     }
 
+    // Verify category belongs to user's company
+    if (category.company.toString() !== req.user.company.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Category does not belong to your company.'
+      });
+    }
+
     // Set mainCategory from category if not provided
     if (!req.body.mainCategory && category.mainCategory) {
       req.body.mainCategory = category.mainCategory;
     }
 
-    // Check if SKU already exists
-    const existingProduct = await Product.findOne({ sku: req.body.sku?.toUpperCase() });
+    // Check if SKU already exists in this company
+    const existingProduct = await Product.findOne({ 
+      sku: req.body.sku?.toUpperCase(),
+      company: req.user.company
+    });
     if (existingProduct) {
       return res.status(400).json({
         success: false,
-        message: 'SKU already exists'
+        message: 'SKU already exists in your company'
       });
     }
 
@@ -227,6 +271,9 @@ const createProduct = async (req, res) => {
         maximum: 1000
       };
     }
+
+    // Set company field
+    req.body.company = req.user.company;
 
     const product = await Product.create(req.body);
 
@@ -293,12 +340,28 @@ const createProduct = async (req, res) => {
 // @access  Private (Owner/Admin)
 const updateProduct = async (req, res) => {
   try {
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
     // Check if product exists
     const existingProduct = await Product.findById(req.params.id);
     if (!existingProduct) {
       return res.status(404).json({
         success: false,
         message: 'Product not found'
+      });
+    }
+
+    // Verify product belongs to user's company
+    if (existingProduct.company.toString() !== req.user.company.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Product does not belong to your company.'
       });
     }
 
@@ -309,6 +372,13 @@ const updateProduct = async (req, res) => {
         return res.status(400).json({
           success: false,
           message: 'Brand not found'
+        });
+      }
+      // Verify brand belongs to user's company
+      if (brand.company.toString() !== req.user.company.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. Brand does not belong to your company.'
         });
       }
     }
@@ -322,26 +392,37 @@ const updateProduct = async (req, res) => {
           message: 'Category not found'
         });
       }
+      // Verify category belongs to user's company
+      if (category.company.toString() !== req.user.company.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. Category does not belong to your company.'
+        });
+      }
       // Set mainCategory from category if not provided
       if (!req.body.mainCategory && category.mainCategory) {
         req.body.mainCategory = category.mainCategory;
       }
     }
 
-    // Check SKU uniqueness if SKU is being updated
+    // Check SKU uniqueness if SKU is being updated (within same company)
     if (req.body.sku && req.body.sku.toUpperCase() !== existingProduct.sku) {
       const skuExists = await Product.findOne({ 
         sku: req.body.sku.toUpperCase(),
-        _id: { $ne: req.params.id }
+        _id: { $ne: req.params.id },
+        company: req.user.company
       });
       if (skuExists) {
         return res.status(400).json({
           success: false,
-          message: 'SKU already exists'
+          message: 'SKU already exists in your company'
         });
       }
       req.body.sku = req.body.sku.toUpperCase();
     }
+
+    // Prevent company from being changed
+    delete req.body.company;
 
     // Update product
     const product = await Product.findByIdAndUpdate(
@@ -401,12 +482,28 @@ const updateProduct = async (req, res) => {
 // @access  Private (Owner/Admin)
 const deleteProduct = async (req, res) => {
   try {
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
     const product = await Product.findById(req.params.id);
 
     if (!product) {
       return res.status(404).json({
         success: false,
         message: 'Product not found'
+      });
+    }
+
+    // Verify product belongs to user's company
+    if (product.company.toString() !== req.user.company.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Product does not belong to your company.'
       });
     }
 
@@ -484,11 +581,20 @@ const updateStock = async (req, res) => {
 // @access  Public
 const getFeaturedProducts = async (req, res) => {
   try {
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
     const { limit = 8 } = req.query;
 
     const products = await Product.find({ 
       isFeatured: true, 
-      status: 'active' 
+      status: 'active',
+      company: req.user.company
     })
       .populate('brand', 'name logo')
       .populate('category', 'name slug')
@@ -514,11 +620,20 @@ const getFeaturedProducts = async (req, res) => {
 // @access  Private (Owner/Admin)
 const getLowStockProducts = async (req, res) => {
   try {
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
     const products = await Product.find({
       $expr: {
         $lte: ['$stock.current', '$stock.minimum']
       },
-      status: 'active'
+      status: 'active',
+      company: req.user.company
     })
       .populate('brand', 'name')
       .populate('category', 'name')
@@ -543,6 +658,14 @@ const getLowStockProducts = async (req, res) => {
 // @access  Private (Owner/Admin)
 const bulkImportProducts = async (req, res) => {
   try {
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
     if (!req.file) {
       return res.status(400).json({
         success: false,
@@ -569,9 +692,15 @@ const bulkImportProducts = async (req, res) => {
       errors: []
     };
 
-    // Get all brands and categories for validation
-    const brands = await Brand.find({ isActive: true }).select('_id name');
-    const categories = await Category.find({ isActive: true }).select('_id name brand');
+    // Get all brands and categories for validation (filtered by company)
+    const brands = await Brand.find({ 
+      isActive: true,
+      company: req.user.company
+    }).select('_id name');
+    const categories = await Category.find({ 
+      isActive: true,
+      company: req.user.company
+    }).select('_id name brand');
     
     const brandMap = new Map(brands.map(b => [b.name.toLowerCase(), b._id.toString()]));
     const categoryMap = new Map();
@@ -679,24 +808,30 @@ const bulkImportProducts = async (req, res) => {
           sku = `PROD-${timestamp}-${random}`;
         }
 
-        // Check if SKU already exists (only if SKU was provided)
+        // Check if SKU already exists in this company (only if SKU was provided)
         if (row['SKU']) {
-          const existingProduct = await Product.findOne({ sku: sku });
+          const existingProduct = await Product.findOne({ 
+            sku: sku,
+            company: req.user.company
+          });
           if (existingProduct) {
             results.failed++;
             results.errors.push({
               row: rowNumber,
               sku: row['SKU'],
-              error: 'SKU already exists'
+              error: 'SKU already exists in your company'
             });
             continue;
           }
         } else {
-          // If auto-generating, make sure it's unique
+          // If auto-generating, make sure it's unique within company
           let isUnique = false;
           let attempts = 0;
           while (!isUnique && attempts < 10) {
-            const existing = await Product.findOne({ sku: sku });
+            const existing = await Product.findOne({ 
+              sku: sku,
+              company: req.user.company
+            });
             if (!existing) {
               isUnique = true;
             } else {
@@ -745,7 +880,8 @@ const bulkImportProducts = async (req, res) => {
           },
           status: row['Status'] ? row['Status'].toString().trim().toLowerCase() : 'active',
           tags: tagsArray.length > 0 ? tagsArray : undefined,
-          images: images.length > 0 ? images : undefined
+          images: images.length > 0 ? images : undefined,
+          company: req.user.company
         };
 
         await Product.create(productData);

@@ -15,15 +15,15 @@ const { validateBrand, validateObjectId, validatePagination } = require('../midd
 
 const router = express.Router();
 
-// Public routes
+// All routes require authentication (brands are company-specific)
+router.use(protect);
+
+// Public authenticated routes (all users with company can access)
 router.get('/', getBrands);
 router.get('/featured', getFeaturedBrands);
 router.get('/with-counts', getBrandsWithCounts);
 router.get('/:id', validateObjectId('id'), getBrand);
 router.get('/:id/products', validateObjectId('id'), validatePagination, getBrandProducts);
-
-// Protected routes
-router.use(protect);
 
 // Owner/Admin only routes
 router.post('/', authorize('owner', 'admin'), validateBrand, createBrand);

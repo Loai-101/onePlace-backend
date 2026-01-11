@@ -10,7 +10,15 @@ const getCategories = async (req, res) => {
   try {
     const { includeInactive = false, mainCategory } = req.query;
 
-    let query = {};
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    let query = { company: req.user.company };
     if (!includeInactive) {
       query.isActive = true;
     }
@@ -26,9 +34,12 @@ const getCategories = async (req, res) => {
       .populate('parent', 'name slug')
       .sort({ sortOrder: 1, name: 1 });
 
-    // Get all products grouped by category and brand
+    // Get all products grouped by category and brand (filtered by company)
     const categoryIds = categories.map(cat => cat._id);
-    const products = await Product.find({ category: { $in: categoryIds } })
+    const products = await Product.find({ 
+      category: { $in: categoryIds },
+      company: req.user.company
+    })
       .populate('brand', 'name logo brandColor')
       .select('category brand');
     
@@ -132,7 +143,33 @@ const getCategories = async (req, res) => {
 // @access  Public
 const getCategoryTree = async (req, res) => {
   try {
-    const tree = await Category.getCategoryTree();
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    // Get categories filtered by company
+    const categories = await Category.find({ 
+      isActive: true,
+      company: req.user.company
+    }).sort({ sortOrder: 1, name: 1 });
+    
+    const buildTree = (parentId = null) => {
+      return categories
+        .filter(cat => {
+          const catParentId = cat.parent ? cat.parent.toString() : null;
+          return catParentId === (parentId ? parentId.toString() : null);
+        })
+        .map(cat => ({
+          ...cat.toObject(),
+          children: buildTree(cat._id)
+        }));
+    };
+    
+    const tree = buildTree();
 
     res.status(200).json({
       success: true,
@@ -152,14 +189,40 @@ const getCategoryTree = async (req, res) => {
 // @access  Public
 const getCategory = async (req, res) => {
   try {
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
     const category = await Category.findById(req.params.id)
       .populate('brand', 'name logo brandColor')
       .populate('brands', 'name logo brandColor')
       .populate('parent', 'name slug')
       .populate('children', 'name slug productCount');
+
+    if (!category) {
+      return res.status(404).json({
+        success: false,
+        message: 'Category not found'
+      });
+    }
+
+    // Verify category belongs to user's company
+    if (category.company.toString() !== req.user.company.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Category does not belong to your company.'
+      });
+    }
     
-    // Get product counts by brand for this category
-    const products = await Product.find({ category: category._id });
+    // Get product counts by brand for this category (filtered by company)
+    const products = await Product.find({ 
+      category: category._id,
+      company: req.user.company
+    });
     const brandCounts = {};
     products.forEach(product => {
       const brandId = product.brand.toString();
@@ -210,17 +273,60 @@ const getCategory = async (req, res) => {
 // @access  Private (Owner/Admin)
 const createCategory = async (req, res) => {
   try {
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
     // Handle brands array - if brands array is provided, use it; otherwise use single brand
     const categoryData = { ...req.body };
+    
+    // Set company field
+    categoryData.company = req.user.company;
     
     if (categoryData.brands && Array.isArray(categoryData.brands) && categoryData.brands.length > 0) {
       // If brands array is provided, set brand to first brand for backward compatibility
       if (!categoryData.brand) {
         categoryData.brand = categoryData.brands[0];
       }
+      // Verify all brands belong to user's company
+      const Brand = require('../models/Brand');
+      for (const brandId of categoryData.brands) {
+        const brand = await Brand.findById(brandId);
+        if (!brand) {
+          return res.status(400).json({
+            success: false,
+            message: `Brand ${brandId} not found`
+          });
+        }
+        if (brand.company.toString() !== req.user.company.toString()) {
+          return res.status(403).json({
+            success: false,
+            message: 'Access denied. Brand does not belong to your company.'
+          });
+        }
+      }
     } else if (categoryData.brand && !categoryData.brands) {
       // If only single brand is provided, create brands array
       categoryData.brands = [categoryData.brand];
+      // Verify brand belongs to user's company
+      const Brand = require('../models/Brand');
+      const brand = await Brand.findById(categoryData.brand);
+      if (!brand) {
+        return res.status(400).json({
+          success: false,
+          message: 'Brand not found'
+        });
+      }
+      if (brand.company.toString() !== req.user.company.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. Brand does not belong to your company.'
+        });
+      }
     }
     
     // Validate that at least one brand is set
@@ -228,6 +334,19 @@ const createCategory = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'At least one brand is required'
+      });
+    }
+
+    // Check if category name already exists for this company
+    const existingCategory = await Category.findOne({ 
+      name: categoryData.name, 
+      company: req.user.company 
+    });
+    
+    if (existingCategory) {
+      return res.status(400).json({
+        success: false,
+        message: 'Category name already exists in your company'
       });
     }
 
@@ -251,17 +370,71 @@ const createCategory = async (req, res) => {
 // @access  Private (Owner/Admin)
 const updateCategory = async (req, res) => {
   try {
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    // Check if category exists and belongs to user's company
+    const existingCategory = await Category.findById(req.params.id);
+    if (!existingCategory) {
+      return res.status(404).json({
+        success: false,
+        message: 'Category not found'
+      });
+    }
+
+    // Verify category belongs to user's company
+    if (existingCategory.company.toString() !== req.user.company.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Category does not belong to your company.'
+      });
+    }
+
     // Handle brands array - if brands array is provided, use it; otherwise use single brand
     const updateData = { ...req.body };
+    
+    // Prevent company from being changed
+    delete updateData.company;
     
     if (updateData.brands && Array.isArray(updateData.brands) && updateData.brands.length > 0) {
       // If brands array is provided, set brand to first brand for backward compatibility
       if (!updateData.brand) {
         updateData.brand = updateData.brands[0];
       }
+      // Verify all brands belong to user's company
+      const Brand = require('../models/Brand');
+      for (const brandId of updateData.brands) {
+        const brand = await Brand.findById(brandId);
+        if (!brand) {
+          return res.status(400).json({
+            success: false,
+            message: `Brand ${brandId} not found`
+          });
+        }
+        if (brand.company.toString() !== req.user.company.toString()) {
+          return res.status(403).json({
+            success: false,
+            message: 'Access denied. Brand does not belong to your company.'
+          });
+        }
+      }
     } else if (updateData.brand && !updateData.brands) {
       // If only single brand is provided, create brands array
       updateData.brands = [updateData.brand];
+      // Verify brand belongs to user's company
+      const Brand = require('../models/Brand');
+      const brand = await Brand.findById(updateData.brand);
+      if (brand && brand.company.toString() !== req.user.company.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. Brand does not belong to your company.'
+        });
+      }
     }
     
     // Validate that at least one brand is set
@@ -270,6 +443,22 @@ const updateCategory = async (req, res) => {
         success: false,
         message: 'At least one brand is required'
       });
+    }
+
+    // If name is being changed, check for duplicate within company
+    if (updateData.name && updateData.name !== existingCategory.name) {
+      const duplicateCategory = await Category.findOne({ 
+        name: updateData.name, 
+        company: req.user.company,
+        _id: { $ne: req.params.id } // Exclude current category
+      });
+      
+      if (duplicateCategory) {
+        return res.status(400).json({
+          success: false,
+          message: 'Category name already exists in your company'
+        });
+      }
     }
 
     const category = await Category.findByIdAndUpdate(req.params.id, updateData, {
@@ -303,6 +492,14 @@ const updateCategory = async (req, res) => {
 // @access  Private (Owner/Admin)
 const deleteCategory = async (req, res) => {
   try {
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
     const category = await Category.findById(req.params.id);
 
     if (!category) {
@@ -312,9 +509,20 @@ const deleteCategory = async (req, res) => {
       });
     }
 
-    // Check if category has products
+    // Verify category belongs to user's company
+    if (category.company.toString() !== req.user.company.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Category does not belong to your company.'
+      });
+    }
+
+    // Check if category has products (filtered by company)
     const Product = require('../models/Product');
-    const productCount = await Product.countDocuments({ category: category._id });
+    const productCount = await Product.countDocuments({ 
+      category: category._id,
+      company: req.user.company
+    });
 
     if (productCount > 0) {
       return res.status(400).json({
@@ -353,6 +561,14 @@ const deleteCategory = async (req, res) => {
 // @access  Public
 const getCategoryProducts = async (req, res) => {
   try {
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
     const { id } = req.params;
     const { page = 1, limit = 20 } = req.query;
 
@@ -365,7 +581,32 @@ const getCategoryProducts = async (req, res) => {
       });
     }
 
-    const products = await category.getAllProducts();
+    // Verify category belongs to user's company
+    if (category.company.toString() !== req.user.company.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Category does not belong to your company.'
+      });
+    }
+
+    // Get products filtered by company
+    const categoryIds = [category._id];
+    const getSubcategoryIds = async (categoryId) => {
+      const subcategories = await Category.find({ 
+        parent: categoryId,
+        company: req.user.company
+      });
+      for (const subcategory of subcategories) {
+        categoryIds.push(subcategory._id);
+        await getSubcategoryIds(subcategory._id);
+      }
+    };
+    await getSubcategoryIds(category._id);
+    
+    const products = await Product.find({ 
+      category: { $in: categoryIds },
+      company: req.user.company
+    });
 
     // Pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
@@ -396,6 +637,14 @@ const getCategoryProducts = async (req, res) => {
 // @access  Private (Owner/Admin)
 const bulkImportCategories = async (req, res) => {
   try {
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
     if (!req.file) {
       return res.status(400).json({
         success: false,
@@ -422,8 +671,11 @@ const bulkImportCategories = async (req, res) => {
       errors: []
     };
 
-    // Get all brands for validation
-    const brands = await Brand.find({ isActive: true }).select('_id name');
+    // Get all brands for validation (filtered by company)
+    const brands = await Brand.find({ 
+      isActive: true,
+      company: req.user.company
+    }).select('_id name');
     const brandMap = new Map(brands.map(b => [b.name.toLowerCase(), b._id.toString()]));
 
     // Process each row
@@ -476,10 +728,23 @@ const bulkImportCategories = async (req, res) => {
           continue;
         }
 
-        // Check if category already exists for this brand
+        // Verify brand belongs to user's company
+        const brand = await Brand.findById(brandId);
+        if (!brand || brand.company.toString() !== req.user.company.toString()) {
+          results.failed++;
+          results.errors.push({
+            row: rowNumber,
+            categoryName: row['Category Name'],
+            error: `Brand "${brandName}" does not belong to your company`
+          });
+          continue;
+        }
+
+        // Check if category already exists for this brand (within company)
         const existingCategory = await Category.findOne({
           name: row['Category Name'].toString().trim(),
-          brand: brandId
+          brand: brandId,
+          company: req.user.company
         });
 
         if (existingCategory) {
@@ -487,7 +752,7 @@ const bulkImportCategories = async (req, res) => {
           results.errors.push({
             row: rowNumber,
             categoryName: row['Category Name'],
-            error: 'Category already exists for this brand'
+            error: 'Category already exists for this brand in your company'
           });
           continue;
         }
@@ -496,13 +761,15 @@ const bulkImportCategories = async (req, res) => {
         const categoryData = {
           name: row['Category Name'].toString().trim(),
           brand: brandId,
+          brands: [brandId],
           mainCategory: mainCategory,
           description: row['Description'] ? row['Description'].toString().trim() : '',
           isActive: row['Is Active'] !== undefined ? (row['Is Active'].toString().toLowerCase() === 'true' || row['Is Active'] === 1) : true,
           image: row['Image URL'] ? {
             url: row['Image URL'].toString().trim(),
             alt: row['Category Name'].toString().trim()
-          } : undefined
+          } : undefined,
+          company: req.user.company
         };
 
         await Category.create(categoryData);

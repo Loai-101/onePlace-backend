@@ -13,7 +13,9 @@ const {
   updateEmployee,
   removeEmployee,
   registerCompany,
-  getDatabaseStatus
+  getDatabaseStatus,
+  getCompanyModules,
+  updateCompanyModules
 } = require('../controllers/companyController');
 const { protect, authorize, hasPermission } = require('../middleware/auth');
 const { validateCompany, validateObjectId, validatePagination } = require('../middleware/validation');
@@ -30,6 +32,8 @@ router.use(protect);
 // Current user's company routes (must be before /:id route)
 router.get('/me', getMyCompany);
 router.put('/me', authorize('owner', 'admin'), updateMyCompany);
+router.get('/me/modules', getCompanyModules);
+router.put('/me/modules', authorize('owner', 'admin'), updateCompanyModules);
 
 // General company routes
 router.get('/', validatePagination, getCompanies);

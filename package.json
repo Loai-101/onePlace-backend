@@ -10,7 +10,8 @@
     "seed": "node utils/seed.js",
     "test:db": "node utils/testConnection.js",
     "verify:apis": "node utils/verifyAPIs.js",
-    "create:buckets": "node utils/createSupabaseBuckets.js"
+    "create:buckets": "node utils/createSupabaseBuckets.js",
+    "fix:brand-indexes": "node utils/fixBrandIndexes.js"
   },
   "keywords": [
     "dental",

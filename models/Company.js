@@ -59,7 +59,7 @@ const companySchema = new mongoose.Schema({
   companyType: {
     type: String,
     required: [true, 'Company type is required'],
-    enum: ['llc', 'corporation', 'partnership', 'sole-proprietorship', 'non-profit', 'other']
+    enum: ['llc', 'wll', 'corporation', 'partnership', 'sole-proprietorship', 'non-profit', 'other']
   },
   dueDate: {
     type: Date,
@@ -73,7 +73,7 @@ const companySchema = new mongoose.Schema({
   businessTarget: {
     type: String,
     required: [true, 'Business target is required'],
-    enum: ['medical-items', 'pharmacy', 'collecting-orders', 'other']
+    enum: ['medical-items', 'pharmacy', 'collecting-orders', 'salon', 'all', 'other']
   },
   numberOfUsers: {
     type: Number,
@@ -301,6 +301,53 @@ const companySchema = new mongoose.Schema({
     type: String,
     trim: true,
     maxlength: [1000, 'Notes cannot exceed 1000 characters']
+  },
+  // Company modules/features support
+  modules: {
+    dashboard: {
+      type: Boolean,
+      default: true
+    },
+    menu: {
+      type: Boolean,
+      default: true
+    },
+    products: {
+      type: Boolean,
+      default: true
+    },
+    categories: {
+      type: Boolean,
+      default: true
+    },
+    brands: {
+      type: Boolean,
+      default: true
+    },
+    users: {
+      type: Boolean,
+      default: true
+    },
+    accounts: {
+      type: Boolean,
+      default: true
+    },
+    calendar: {
+      type: Boolean,
+      default: true
+    },
+    reports: {
+      type: Boolean,
+      default: true
+    },
+    marketing: {
+      type: Boolean,
+      default: true
+    },
+    settings: {
+      type: Boolean,
+      default: true
+    }
   }
 }, {
   timestamps: true

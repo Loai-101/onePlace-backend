@@ -7,7 +7,15 @@ const getBrands = async (req, res) => {
   try {
     const { includeInactive = false, featured = false, mainCategory } = req.query;
 
-    let query = {};
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    let query = { company: req.user.company };
     if (!includeInactive) {
       query.isActive = true;
     }
@@ -18,7 +26,11 @@ const getBrands = async (req, res) => {
     // If mainCategory filter is provided, filter brands that have products with this mainCategory
     if (mainCategory && mainCategory !== 'all' && mainCategory !== 'All') {
       const Product = require('../models/Product');
-      const products = await Product.find({ mainCategory: mainCategory, status: 'active' }).select('brand');
+      const products = await Product.find({ 
+        mainCategory: mainCategory, 
+        status: 'active',
+        company: req.user.company
+      }).select('brand');
       const brandIds = [...new Set(products.map(p => p.brand?.toString()).filter(Boolean))];
       if (brandIds.length === 0) {
         // No brands found for this mainCategory
@@ -53,7 +65,19 @@ const getBrands = async (req, res) => {
 // @access  Public
 const getFeaturedBrands = async (req, res) => {
   try {
-    const brands = await Brand.getFeatured();
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const brands = await Brand.find({ 
+      isActive: true, 
+      isFeatured: true,
+      company: req.user.company
+    }).sort({ sortOrder: 1, name: 1 });
 
     res.status(200).json({
       success: true,
@@ -74,7 +98,25 @@ const getFeaturedBrands = async (req, res) => {
 // @access  Public
 const getBrandsWithCounts = async (req, res) => {
   try {
-    const brands = await Brand.getWithProductCounts();
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const brands = await Brand.find({ company: req.user.company, isActive: true }).sort({ sortOrder: 1, name: 1 });
+    const Product = require('../models/Product');
+    const brandsWithCounts = await Promise.all(
+      brands.map(async (brand) => {
+        const productCount = await Product.countDocuments({ brand: brand._id, status: 'active', company: req.user.company });
+        return {
+          ...brand.toObject(),
+          productCount
+        };
+      })
+    );
 
     res.status(200).json({
       success: true,
@@ -104,6 +146,21 @@ const getBrand = async (req, res) => {
       });
     }
 
+    // Verify brand belongs to user's company
+    if (req.user && req.user.company && brand.company.toString() !== req.user.company.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Brand does not belong to your company.'
+      });
+    }
+
+    if (!brand) {
+      return res.status(404).json({
+        success: false,
+        message: 'Brand not found'
+      });
+    }
+
     res.status(200).json({
       success: true,
       data: brand
@@ -122,7 +179,65 @@ const getBrand = async (req, res) => {
 // @access  Private (Owner/Admin)
 const createBrand = async (req, res) => {
   try {
-    console.log('Creating brand with data:', req.body);
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    // Trim and normalize brand name
+    const brandName = req.body.name ? req.body.name.trim() : '';
+    if (!brandName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Brand name is required'
+      });
+    }
+
+    // Check if brand name already exists for this company (case-insensitive)
+    const existingBrand = await Brand.findOne({ 
+      name: { $regex: new RegExp(`^${brandName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }, // Case-insensitive match, escape regex special chars
+      company: req.user.company 
+    });
+    
+    if (existingBrand) {
+      console.log('Duplicate brand found:', {
+        existingBrandId: existingBrand._id,
+        existingBrandName: existingBrand.name,
+        existingBrandCompany: existingBrand.company,
+        userCompany: req.user.company,
+        companiesMatch: existingBrand.company.toString() === req.user.company.toString()
+      });
+      return res.status(400).json({
+        success: false,
+        message: `Brand name "${existingBrand.name}" already exists in your company`
+      });
+    }
+
+    console.log('Creating brand with data:', {
+      name: brandName,
+      company: req.user.company,
+      companyId: req.user.company.toString()
+    });
+    
+    // Set company field and normalize name
+    req.body.company = req.user.company;
+    req.body.name = brandName; // Use trimmed name
+    
+    // Double-check company is set correctly
+    if (!req.body.company || req.body.company.toString() !== req.user.company.toString()) {
+      console.error('Company mismatch detected!', {
+        bodyCompany: req.body.company,
+        userCompany: req.user.company
+      });
+      return res.status(400).json({
+        success: false,
+        message: 'Company assignment error. Please try again.'
+      });
+    }
+    
     const brand = await Brand.create(req.body);
 
     res.status(201).json({
@@ -132,6 +247,9 @@ const createBrand = async (req, res) => {
   } catch (error) {
     console.error('Create brand error:', error);
     console.error('Error details:', error.message);
+    console.error('Error code:', error.code);
+    console.error('Request body:', req.body);
+    console.error('User company:', req.user?.company);
     
     // Handle validation errors
     if (error.name === 'ValidationError') {
@@ -143,11 +261,69 @@ const createBrand = async (req, res) => {
       });
     }
     
-    // Handle duplicate key error
+    // Handle duplicate key error (from MongoDB unique index)
     if (error.code === 11000) {
+      console.error('Duplicate key error detected. Error message:', error.message);
+      console.error('Error keyPattern:', error.keyPattern);
+      console.error('Error keyValue:', error.keyValue);
+      console.error('User company:', req.user.company?.toString());
+      console.error('This might indicate an old unique index exists. Please check database indexes.');
+      
+      // Check if error is from compound index (name + company) or old single index (name only)
+      const isCompoundIndexError = error.keyPattern && error.keyPattern.name && error.keyPattern.company;
+      const isOldIndexError = error.keyPattern && error.keyPattern.name && !error.keyPattern.company;
+      
+      if (isOldIndexError) {
+        console.error('⚠️ WARNING: Old unique index detected on "name" field only!');
+        console.error('This prevents different companies from using the same brand name.');
+        console.error('Please drop the old index: db.brands.dropIndex("name_1")');
+        return res.status(400).json({
+          success: false,
+          message: 'Database configuration error: Old unique index detected. Please contact administrator.'
+        });
+      }
+      
+      // Try to find the existing brand to provide better error message
+      try {
+        const brandNameToCheck = req.body.name?.trim() || '';
+        const existingBrand = await Brand.findOne({ 
+          name: { $regex: new RegExp(`^${brandNameToCheck.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+          company: req.user.company 
+        });
+        
+        if (existingBrand) {
+          console.log('Found existing brand in same company:', {
+            brandId: existingBrand._id,
+            brandName: existingBrand.name,
+            brandCompany: existingBrand.company.toString(),
+            userCompany: req.user.company.toString()
+          });
+          return res.status(400).json({
+            success: false,
+            message: `Brand name "${existingBrand.name}" already exists in your company. Please choose a different name.`
+          });
+        } else {
+          // Brand exists but in different company - this shouldn't happen with compound index
+          console.error('⚠️ Brand exists in different company or index issue!');
+          const anyBrand = await Brand.findOne({ 
+            name: { $regex: new RegExp(`^${brandNameToCheck.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+          });
+          if (anyBrand) {
+            console.error('Brand found in different company:', {
+              brandId: anyBrand._id,
+              brandName: anyBrand.name,
+              brandCompany: anyBrand.company.toString(),
+              userCompany: req.user.company.toString()
+            });
+          }
+        }
+      } catch (lookupError) {
+        console.error('Error looking up existing brand:', lookupError);
+      }
+      
       return res.status(400).json({
         success: false,
-        message: 'Brand name already exists'
+        message: `Brand name "${req.body.name || ''}" already exists. Please choose a different name.`
       });
     }
     
@@ -163,6 +339,61 @@ const createBrand = async (req, res) => {
 // @access  Private (Owner/Admin)
 const updateBrand = async (req, res) => {
   try {
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    // Check if brand exists and belongs to user's company
+    const existingBrand = await Brand.findById(req.params.id);
+    if (!existingBrand) {
+      return res.status(404).json({
+        success: false,
+        message: 'Brand not found'
+      });
+    }
+
+    // Verify brand belongs to user's company
+    if (existingBrand.company.toString() !== req.user.company.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Brand does not belong to your company.'
+      });
+    }
+
+    // If name is being changed, check for duplicate within company (case-insensitive)
+    if (req.body.name) {
+      const newBrandName = req.body.name.trim();
+      
+      // Normalize existing brand name for comparison
+      const existingBrandName = existingBrand.name.trim();
+      
+      // Only check if the name actually changed (case-insensitive)
+      if (newBrandName.toLowerCase() !== existingBrandName.toLowerCase()) {
+        const duplicateBrand = await Brand.findOne({ 
+          name: { $regex: new RegExp(`^${newBrandName}$`, 'i') }, // Case-insensitive match
+          company: req.user.company,
+          _id: { $ne: req.params.id } // Exclude current brand
+        });
+        
+        if (duplicateBrand) {
+          return res.status(400).json({
+            success: false,
+            message: `Brand name "${duplicateBrand.name}" already exists in your company`
+          });
+        }
+      }
+      
+      // Use trimmed name
+      req.body.name = newBrandName;
+    }
+
+    // Prevent company from being changed
+    delete req.body.company;
+
     const brand = await Brand.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
       runValidators: true
@@ -193,6 +424,14 @@ const updateBrand = async (req, res) => {
 // @access  Private (Owner/Admin)
 const deleteBrand = async (req, res) => {
   try {
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
     const brand = await Brand.findById(req.params.id);
 
     if (!brand) {
@@ -202,9 +441,20 @@ const deleteBrand = async (req, res) => {
       });
     }
 
-    // Check if brand has products
+    // Verify brand belongs to user's company
+    if (brand.company.toString() !== req.user.company.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Brand does not belong to your company.'
+      });
+    }
+
+    // Check if brand has products (filtered by company)
     const Product = require('../models/Product');
-    const productCount = await Product.countDocuments({ brand: brand._id });
+    const productCount = await Product.countDocuments({ 
+      brand: brand._id,
+      company: req.user.company
+    });
 
     if (productCount > 0) {
       return res.status(400).json({
@@ -233,6 +483,14 @@ const deleteBrand = async (req, res) => {
 // @access  Public
 const getBrandProducts = async (req, res) => {
   try {
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
     const { id } = req.params;
     const { page = 1, limit = 20 } = req.query;
 
@@ -245,16 +503,32 @@ const getBrandProducts = async (req, res) => {
       });
     }
 
+    // Verify brand belongs to user's company
+    if (brand.company.toString() !== req.user.company.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Brand does not belong to your company.'
+      });
+    }
+
     const Product = require('../models/Product');
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    const products = await Product.find({ brand: id, status: 'active' })
+    const products = await Product.find({ 
+      brand: id, 
+      status: 'active',
+      company: req.user.company
+    })
       .populate('category', 'name slug')
       .sort({ name: 1 })
       .skip(skip)
       .limit(parseInt(limit));
 
-    const total = await Product.countDocuments({ brand: id, status: 'active' });
+    const total = await Product.countDocuments({ 
+      brand: id, 
+      status: 'active',
+      company: req.user.company
+    });
 
     res.status(200).json({
       success: true,

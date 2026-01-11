@@ -191,6 +191,22 @@ const createOrder = async (req, res) => {
         });
       }
 
+      // Verify product belongs to user's company
+      if (req.user.company && product.company) {
+        if (product.company.toString() !== req.user.company.toString()) {
+          return res.status(403).json({
+            success: false,
+            message: `Access denied. Product "${product.name}" does not belong to your company.`
+          });
+        }
+      } else if (req.user.company && !product.company) {
+        // Product missing company field (old data) - reject for security
+        return res.status(403).json({
+          success: false,
+          message: `Access denied. Product "${product.name}" is not associated with a company.`
+        });
+      }
+
       // Update product stock
       await product.updateStock(item.quantity, 'subtract');
 

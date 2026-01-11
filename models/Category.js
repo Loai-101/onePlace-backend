@@ -79,6 +79,12 @@ const categorySchema = new mongoose.Schema({
       trim: true,
       maxlength: [160, 'SEO description cannot exceed 160 characters']
     }
+  },
+  company: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: [true, 'Company is required'],
+    index: true
   }
 }, {
   timestamps: true
@@ -93,6 +99,8 @@ categorySchema.index({ slug: 1 });
 categorySchema.index({ parent: 1 });
 categorySchema.index({ isActive: 1 });
 categorySchema.index({ sortOrder: 1 });
+categorySchema.index({ company: 1 }); // Index for company filtering
+categorySchema.index({ name: 1, company: 1 }, { unique: true }); // Category name must be unique per company
 
 // Pre-save middleware to generate slug
 categorySchema.pre('save', function(next) {

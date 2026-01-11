@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Admin = require('../models/Admin');
+const Company = require('../models/Company');
 
 // Protect routes - verify JWT token
 const protect = async (req, res, next) => {
@@ -269,6 +270,78 @@ const protectAdmin = async (req, res, next) => {
   }
 };
 
+// Helper function to ensure company has modules initialized
+const ensureCompanyModules = async (company) => {
+  if (!company.modules) {
+    // Initialize modules with defaults for existing companies
+    company.modules = {
+      dashboard: true,
+      menu: true,
+      products: true,
+      categories: true,
+      brands: true,
+      users: true,
+      accounts: true,
+      calendar: true,
+      reports: true,
+      marketing: true,
+      settings: true
+    };
+    await company.save();
+  }
+  return company.modules;
+};
+
+// Check if company module is enabled
+const checkModule = (moduleName) => {
+  return async (req, res, next) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({
+          success: false,
+          message: 'Access denied. Please authenticate first.'
+        });
+      }
+
+      // If user doesn't have a company, allow access (for system admins)
+      if (!req.user.company) {
+        return next();
+      }
+
+      // Get company modules
+      const company = await Company.findById(req.user.company);
+      
+      if (!company) {
+        return res.status(404).json({
+          success: false,
+          message: 'Company not found'
+        });
+      }
+
+      // Ensure modules are initialized (for existing companies)
+      const modules = await ensureCompanyModules(company);
+
+      // Check if module is enabled (default to true if not set)
+      const isEnabled = modules[moduleName] !== false;
+
+      if (!isEnabled) {
+        return res.status(403).json({
+          success: false,
+          message: `Access denied. The ${moduleName} module is not enabled for your company.`
+        });
+      }
+
+      next();
+    } catch (error) {
+      console.error('Check module middleware error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Server error checking module access.'
+      });
+    }
+  };
+};
+
 module.exports = {
   protect,
   protectAdmin,
@@ -276,5 +349,6 @@ module.exports = {
   hasPermission,
   optionalAuth,
   generateToken,
-  sendTokenResponse
+  sendTokenResponse,
+  checkModule
 };

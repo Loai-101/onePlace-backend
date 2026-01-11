@@ -313,14 +313,33 @@ const getReports = async (req, res) => {
       });
     }
 
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
     const { salesman, startDate, endDate } = req.query;
 
-    // Build query
-    let query = {};
+    // Build query - filter by company first
+    let query = { company: req.user.company };
 
-    // Filter by salesman
+    // Filter by salesman (must be from same company)
     if (salesman && salesman !== 'all') {
-      query.salesman = salesman;
+      // Verify salesman belongs to user's company
+      const salesmanUser = await User.findById(salesman);
+      if (salesmanUser && salesmanUser.company.toString() === req.user.company.toString()) {
+        query.salesman = salesman;
+      } else {
+        // Salesman doesn't belong to company, return empty results
+        return res.status(200).json({
+          success: true,
+          count: 0,
+          data: []
+        });
+      }
     }
 
     // Filter by date range
@@ -336,7 +355,7 @@ const getReports = async (req, res) => {
       }
     }
 
-    // Get reports
+    // Get reports - only from user's company
     const reports = await Report.find(query)
       .populate('salesman', 'name email')
       .populate('company', 'name')
@@ -369,6 +388,26 @@ const getReport = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Report not found'
+      });
+    }
+
+    // Verify report belongs to user's company
+    if (req.user.company && report.company) {
+      const reportCompanyId = typeof report.company === 'object' 
+        ? report.company._id || report.company 
+        : report.company;
+      
+      if (reportCompanyId.toString() !== req.user.company.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. Report does not belong to your company.'
+        });
+      }
+    } else if (req.user.company && !report.company) {
+      // Report missing company field (old data) - reject for security
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Report is not associated with a company.'
       });
     }
 
@@ -405,12 +444,28 @@ const deleteReport = async (req, res) => {
       });
     }
 
+    // Ensure user has a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
     const report = await Report.findById(req.params.id);
 
     if (!report) {
       return res.status(404).json({
         success: false,
         message: 'Report not found'
+      });
+    }
+
+    // Verify report belongs to user's company
+    if (report.company.toString() !== req.user.company.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Report does not belong to your company.'
       });
     }
 

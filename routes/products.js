@@ -44,13 +44,13 @@ const uploadExcel = upload.single('excelFile');
 
 const router = express.Router();
 
-// Public routes (must be defined before protected routes to avoid route conflicts)
+// All routes require authentication (products are company-specific)
+router.use(protect);
+
+// Public authenticated routes (all users with company can access)
 router.get('/featured', getFeaturedProducts);
 router.get('/', validatePagination, validateSearch, getProducts);
 router.get('/:id', validateObjectId('id'), getProduct);
-
-// Protected routes - all routes below require authentication
-router.use(protect);
 
 // Owner/Admin only routes
 router.get('/low-stock', authorize('owner', 'admin'), getLowStockProducts);

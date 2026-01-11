@@ -4,7 +4,6 @@ const brandSchema = new mongoose.Schema({
   name: {
     type: String,
     required: [true, 'Brand name is required'],
-    unique: true,
     trim: true,
     maxlength: [100, 'Brand name cannot exceed 100 characters']
   },
@@ -104,17 +103,24 @@ const brandSchema = new mongoose.Schema({
       type: String,
       trim: true
     }]
+  },
+  company: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: [true, 'Company is required'],
+    index: true
   }
 }, {
   timestamps: true
 });
 
 // Index for better performance
-brandSchema.index({ name: 1 });
 brandSchema.index({ mainCategory: 1 }); // Index for main category filtering
 brandSchema.index({ isActive: 1 });
 brandSchema.index({ isFeatured: 1 });
 brandSchema.index({ sortOrder: 1 });
+brandSchema.index({ company: 1 }); // Index for company filtering
+brandSchema.index({ name: 1, company: 1 }, { unique: true }); // Brand name must be unique per company
 
 // Virtual for brand statistics
 brandSchema.virtual('stats').get(function() {
