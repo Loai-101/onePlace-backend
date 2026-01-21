@@ -3,15 +3,20 @@ const User = require('../models/User');
 const Company = require('../models/Company');
 const { uploadFile } = require('../utils/supabase');
 
-// Import jsPDF - try different import methods
+// Import jsPDF - try different import methods for v3 and v4 compatibility
 let jsPDF;
 try {
   // Try default export first
   jsPDF = require('jspdf');
-  // If it's an object with jsPDF property, use that
+  // Handle different export formats (v3 vs v4)
   if (jsPDF.jsPDF) {
+    // v3 format: { jsPDF: class }
     jsPDF = jsPDF.jsPDF;
+  } else if (jsPDF.default) {
+    // v4 format: { default: class }
+    jsPDF = jsPDF.default;
   }
+  // If jsPDF is already the class (direct export), use it as is
 } catch (error) {
   console.error('Failed to import jsPDF:', error);
   throw new Error('jsPDF library is not properly installed. Please run: npm install jspdf');
