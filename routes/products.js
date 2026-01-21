@@ -12,6 +12,7 @@ const {
   bulkImportProducts
 } = require('../controllers/productController');
 const { protect, authorize, hasPermission } = require('../middleware/auth');
+const { enforceCompanyContext } = require('../middleware/companyIsolation');
 const { validateProduct, validateObjectId, validatePagination, validateSearch } = require('../middleware/validation');
 
 // Configure multer for Excel file upload
@@ -47,17 +48,17 @@ const router = express.Router();
 // All routes require authentication (products are company-specific)
 router.use(protect);
 
-// Public authenticated routes (all users with company can access)
-router.get('/featured', getFeaturedProducts);
-router.get('/', validatePagination, validateSearch, getProducts);
-router.get('/:id', validateObjectId('id'), getProduct);
+// Public authenticated routes (all users with company can access) - STRICT COMPANY ISOLATION
+router.get('/featured', enforceCompanyContext, getFeaturedProducts);
+router.get('/', enforceCompanyContext, validatePagination, validateSearch, getProducts);
+router.get('/:id', enforceCompanyContext, validateObjectId('id'), getProduct);
 
-// Owner/Admin only routes
-router.get('/low-stock', authorize('owner', 'admin'), getLowStockProducts);
-router.post('/', authorize('owner', 'admin'), validateProduct, createProduct);
-router.post('/bulk-import', authorize('owner', 'admin'), uploadExcel, bulkImportProducts);
-router.put('/:id', authorize('owner', 'admin'), validateObjectId('id'), updateProduct);
-router.patch('/:id/stock', authorize('owner', 'admin'), validateObjectId('id'), updateStock);
-router.delete('/:id', authorize('owner', 'admin'), validateObjectId('id'), deleteProduct);
+// Owner/Admin only routes - STRICT COMPANY ISOLATION
+router.get('/low-stock', enforceCompanyContext, authorize('owner', 'admin'), getLowStockProducts);
+router.post('/', enforceCompanyContext, authorize('owner', 'admin'), validateProduct, createProduct);
+router.post('/bulk-import', enforceCompanyContext, authorize('owner', 'admin'), uploadExcel, bulkImportProducts);
+router.put('/:id', enforceCompanyContext, authorize('owner', 'admin'), validateObjectId('id'), updateProduct);
+router.patch('/:id/stock', enforceCompanyContext, authorize('owner', 'admin'), validateObjectId('id'), updateStock);
+router.delete('/:id', enforceCompanyContext, authorize('owner', 'admin'), validateObjectId('id'), deleteProduct);
 
 module.exports = router;

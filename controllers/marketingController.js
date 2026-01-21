@@ -1,6 +1,10 @@
 const Account = require('../models/Account');
 const Company = require('../models/Company');
 const XLSX = require('xlsx');
+const { 
+  validateCompanyOwnership, 
+  buildCompanyQuery 
+} = require('../middleware/companyIsolation');
 
 // @desc    Get marketing dashboard data
 // @route   GET /api/marketing/dashboard

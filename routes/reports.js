@@ -9,6 +9,7 @@ const {
   deleteReport
 } = require('../controllers/reportController');
 const { protect, authorize } = require('../middleware/auth');
+const { enforceCompanyContext } = require('../middleware/companyIsolation');
 const { validateObjectId } = require('../middleware/validation');
 
 // Configure multer for file uploads (store in memory)
@@ -39,20 +40,20 @@ const upload = multer({
 // All routes require authentication
 router.use(protect);
 
-// Upload report file - Salesman only
-router.post('/upload', authorize('salesman'), upload.single('file'), uploadReport);
+// Upload report file - Salesman only - STRICT COMPANY ISOLATION
+router.post('/upload', enforceCompanyContext, authorize('salesman'), upload.single('file'), uploadReport);
 
-// Create PDF report - Salesman only
-router.post('/pdf', authorize('salesman'), createPdfReport);
+// Create PDF report - Salesman only - STRICT COMPANY ISOLATION
+router.post('/pdf', enforceCompanyContext, authorize('salesman'), createPdfReport);
 
-// Get all reports - Owner and Admin
-router.get('/', authorize('owner', 'admin'), getReports);
+// Get all reports - Owner and Admin - STRICT COMPANY ISOLATION
+router.get('/', enforceCompanyContext, authorize('owner', 'admin'), getReports);
 
-// Get single report - Owner, Admin, or Salesman who created it
-router.get('/:id', validateObjectId('id'), getReport);
+// Get single report - Owner, Admin, or Salesman who created it - STRICT COMPANY ISOLATION
+router.get('/:id', enforceCompanyContext, validateObjectId('id'), getReport);
 
-// Delete report - Owner and Admin
-router.delete('/:id', validateObjectId('id'), authorize('owner', 'admin'), deleteReport);
+// Delete report - Owner and Admin - STRICT COMPANY ISOLATION
+router.delete('/:id', enforceCompanyContext, validateObjectId('id'), authorize('owner', 'admin'), deleteReport);
 
 module.exports = router;
 

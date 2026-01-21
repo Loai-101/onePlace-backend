@@ -1,6 +1,10 @@
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Company = require('../models/Company');
+const { 
+  validateCompanyOwnership, 
+  buildCompanyQuery 
+} = require('../middleware/companyIsolation');
 
 // @desc    Get all orders
 // @route   GET /api/orders
@@ -20,13 +24,18 @@ const getOrders = async (req, res) => {
       order = 'desc'
     } = req.query;
 
-    // Build query
-    let query = {};
-
-    // Filter by user's company for all roles
-    if (req.user.company) {
-      query['customer.company'] = req.user.company;
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
     }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Build query - Orders use customer.company field
+    let query = { 'customer.company': companyId };
 
     // Status filter
     if (status) {
@@ -41,13 +50,13 @@ const getOrders = async (req, res) => {
     // Additional company filter (if provided, must match user's company)
     if (company) {
       // Ensure the requested company matches user's company
-      if (company !== req.user.company?.toString()) {
+      if (company !== companyId.toString()) {
         return res.status(403).json({
           success: false,
           message: 'Access denied. You can only access orders from your company.'
         });
       }
-      query['customer.company'] = company;
+      query['customer.company'] = companyId;
     }
 
     // For salesmen, only show their own orders
@@ -111,7 +120,22 @@ const getOrders = async (req, res) => {
 // @access  Private
 const getOrder = async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id)
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    // Orders use customer.company field
+    const order = await Order.findOne({
+      _id: req.params.id,
+      'customer.company': companyId
+    })
       .populate('customer.company', 'name location contactInfo paymentInfo')
       .populate('items.product', 'name sku brand category specifications')
       .populate('createdBy', 'name email role')
@@ -120,15 +144,16 @@ const getOrder = async (req, res) => {
     if (!order) {
       return res.status(404).json({
         success: false,
-        message: 'Order not found'
+        message: 'Order not found or access denied'
       });
     }
 
-    // Check if order belongs to user's company
-    if (req.user.company && order.customer?.company?._id?.toString() !== req.user.company.toString()) {
+    // Double-check ownership (defense in depth)
+    const orderCompanyId = order.customer?.company?._id?.toString() || order.customer?.company?.toString();
+    if (orderCompanyId !== companyId.toString()) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. You can only access orders from your company.'
+        message: 'Access denied. This order belongs to a different company.'
       });
     }
 
@@ -160,19 +185,20 @@ const createOrder = async (req, res) => {
   try {
     const orderData = req.body;
 
-    // Validate that the order's company matches user's company
-    if (orderData.customer?.company) {
-      if (orderData.customer.company.toString() !== req.user.company?.toString()) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied. You can only create orders for your company.'
-        });
-      }
-    } else if (req.user.company) {
-      // If company not provided, set it to user's company
-      orderData.customer = orderData.customer || {};
-      orderData.customer.company = req.user.company;
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
     }
+
+    const companyId = req.user.company._id || req.user.company;
+
+    // CRITICAL: Force company to user's company (prevent cross-company creation)
+    // Override any company field in request body
+    orderData.customer = orderData.customer || {};
+    orderData.customer.company = companyId;  // Always use authenticated user's company
 
     // Calculate totals
     let subtotal = 0;
@@ -191,19 +217,18 @@ const createOrder = async (req, res) => {
         });
       }
 
-      // Verify product belongs to user's company
-      if (req.user.company && product.company) {
-        if (product.company.toString() !== req.user.company.toString()) {
-          return res.status(403).json({
-            success: false,
-            message: `Access denied. Product "${product.name}" does not belong to your company.`
-          });
-        }
-      } else if (req.user.company && !product.company) {
-        // Product missing company field (old data) - reject for security
+      // Verify product belongs to user's company (strict company filter)
+      if (!product.company) {
         return res.status(403).json({
           success: false,
           message: `Access denied. Product "${product.name}" is not associated with a company.`
+        });
+      }
+      
+      if (product.company.toString() !== companyId.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: `Access denied. Product "${product.name}" does not belong to your company.`
         });
       }
 
@@ -321,12 +346,16 @@ const updateOrder = async (req, res) => {
       });
     }
 
-    // Check if order belongs to user's company
-    if (req.user.company && order.customer?.company?._id?.toString() !== req.user.company.toString()) {
+    // CRITICAL: Prevent company from being changed
+    if (req.body.customer?.company && req.body.customer.company.toString() !== companyId.toString()) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. You can only update orders from your company.'
+        message: 'Access denied. Cannot change order company.'
       });
+    }
+    // Ensure company remains set to user's company
+    if (req.body.customer) {
+      req.body.customer.company = companyId;
     }
 
     // For salesmen, only allow updates to their own orders
@@ -364,10 +393,18 @@ const updateOrder = async (req, res) => {
       order.calculateTotals();
     }
 
-    const updatedOrder = await Order.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true
-    })
+    // Update with company filter to prevent cross-company updates
+    const updatedOrder = await Order.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        'customer.company': companyId
+      },
+      req.body,
+      {
+        new: true,
+        runValidators: true
+      }
+    )
       .populate('customer.company', 'name location')
       .populate('items.product', 'name sku brand category pricing')
       .populate('createdBy', 'name email role')
@@ -413,24 +450,39 @@ const updateOrder = async (req, res) => {
 // @desc    Update order status
 // @route   PATCH /api/orders/:id/status
 // @access  Private
+// @isolation STRICT - Verifies order belongs to user's company
 const updateOrderStatus = async (req, res) => {
   try {
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
     const { status } = req.body;
 
-    const order = await Order.findById(req.params.id);
+    // Query with company filter FIRST - prevents cross-company access
+    const order = await Order.findOne({
+      _id: req.params.id,
+      'customer.company': companyId
+    });
 
     if (!order) {
       return res.status(404).json({
         success: false,
-        message: 'Order not found'
+        message: 'Order not found or access denied'
       });
     }
 
-    // Check if order belongs to user's company
-    if (req.user.company && order.customer?.company?._id?.toString() !== req.user.company.toString()) {
+    // Double-check ownership (defense in depth)
+    const orderCompanyId = order.customer?.company?._id?.toString() || order.customer?.company?.toString();
+    if (orderCompanyId !== companyId.toString()) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. You can only update orders from your company.'
+        message: 'Access denied. This order belongs to a different company.'
       });
     }
 
@@ -444,7 +496,11 @@ const updateOrderStatus = async (req, res) => {
 
     await order.updateStatus(status, req.user.id);
 
-    const updatedOrder = await Order.findById(req.params.id)
+    // Fetch updated order with company filter
+    const updatedOrder = await Order.findOne({
+      _id: req.params.id,
+      'customer.company': companyId
+    })
       .populate('customer.company', 'name location')
       .populate('items.product', 'name sku brand category pricing')
       .populate('createdBy', 'name email role')
@@ -466,28 +522,47 @@ const updateOrderStatus = async (req, res) => {
 // @desc    Delete order
 // @route   DELETE /api/orders/:id
 // @access  Private (Owner/Admin)
+// @isolation STRICT - Verifies order belongs to user's company before deletion
 const deleteOrder = async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id);
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    const order = await Order.findOne({
+      _id: req.params.id,
+      'customer.company': companyId
+    });
 
     if (!order) {
       return res.status(404).json({
         success: false,
-        message: 'Order not found'
+        message: 'Order not found or access denied'
       });
     }
 
-    // Check if order belongs to user's company
-    if (req.user.company && order.customer?.company?._id?.toString() !== req.user.company.toString()) {
+    // Double-check ownership (defense in depth)
+    const orderCompanyId = order.customer?.company?._id?.toString() || order.customer?.company?.toString();
+    if (orderCompanyId !== companyId.toString()) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. You can only delete orders from your company.'
+        message: 'Access denied. This order belongs to a different company.'
       });
     }
 
-    // Restore product stock
+    // Restore product stock (verify products belong to company)
     for (let item of order.items) {
-      const product = await Product.findById(item.product);
+      const product = await Product.findOne({
+        _id: item.product,
+        company: companyId
+      });
       if (product) {
         await product.updateStock(item.quantity, 'add');
       }

@@ -12,6 +12,7 @@ const {
   bulkImportAccounts
 } = require('../controllers/accountController');
 const { protect, authorize } = require('../middleware/auth');
+const { enforceCompanyContext } = require('../middleware/companyIsolation');
 
 // Configure multer for Excel file uploads
 const storage = multer.memoryStorage();
@@ -43,20 +44,21 @@ const router = express.Router();
 router.get('/branches', protect, getMedicalBranches);
 router.get('/specializations/:branch', protect, getSpecializations);
 
-// Account CRUD routes
+// Account CRUD routes - STRICT COMPANY ISOLATION
+// enforceCompanyContext ensures all operations are scoped to user's company
 router.route('/')
-  .get(protect, authorize('owner', 'admin', 'salesman', 'accountant'), getAccounts)
-  .post(protect, authorize('owner', 'admin'), createAccount);
+  .get(protect, enforceCompanyContext, authorize('owner', 'admin', 'salesman', 'accountant'), getAccounts)
+  .post(protect, enforceCompanyContext, authorize('owner', 'admin'), createAccount);
 
 router.route('/:id')
-  .get(protect, authorize('owner', 'admin', 'salesman', 'accountant'), getAccount)
-  .put(protect, authorize('owner', 'admin'), updateAccount)
-  .delete(protect, authorize('owner', 'admin'), deleteAccount);
+  .get(protect, enforceCompanyContext, authorize('owner', 'admin', 'salesman', 'accountant'), getAccount)
+  .put(protect, enforceCompanyContext, authorize('owner', 'admin'), updateAccount)
+  .delete(protect, enforceCompanyContext, authorize('owner', 'admin'), deleteAccount);
 
-router.patch('/:id/toggle-status', protect, authorize('owner', 'admin'), toggleAccountStatus);
+router.patch('/:id/toggle-status', protect, enforceCompanyContext, authorize('owner', 'admin'), toggleAccountStatus);
 
 // Bulk import route (must be before /:id route)
-router.post('/bulk-import', protect, authorize('owner', 'admin'), uploadExcel.single('file'), bulkImportAccounts);
+router.post('/bulk-import', protect, enforceCompanyContext, authorize('owner', 'admin'), uploadExcel.single('file'), bulkImportAccounts);
 
 module.exports = router;
 

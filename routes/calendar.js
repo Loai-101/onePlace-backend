@@ -9,17 +9,19 @@ const {
   sendReport
 } = require('../controllers/calendarController');
 const { protect, authorize } = require('../middleware/auth');
+const { enforceCompanyContext } = require('../middleware/companyIsolation');
 const { validateObjectId } = require('../middleware/validation');
 
 // All routes require authentication
 router.use(protect);
 
-router.get('/', authorize('owner', 'admin', 'salesman'), getCalendarEvents);
-router.get('/:id', validateObjectId('id'), authorize('owner', 'admin', 'salesman'), getCalendarEvent);
-router.post('/', authorize('owner', 'admin', 'salesman'), createCalendarEvent);
-router.put('/:id', validateObjectId('id'), authorize('owner', 'admin', 'salesman'), updateCalendarEvent);
-router.delete('/:id', validateObjectId('id'), authorize('owner', 'admin', 'salesman'), deleteCalendarEvent);
-router.post('/report', authorize('salesman'), sendReport);
+// All routes - STRICT COMPANY ISOLATION
+router.get('/', enforceCompanyContext, authorize('owner', 'admin', 'salesman'), getCalendarEvents);
+router.get('/:id', enforceCompanyContext, validateObjectId('id'), authorize('owner', 'admin', 'salesman'), getCalendarEvent);
+router.post('/', enforceCompanyContext, authorize('owner', 'admin', 'salesman'), createCalendarEvent);
+router.put('/:id', enforceCompanyContext, validateObjectId('id'), authorize('owner', 'admin', 'salesman'), updateCalendarEvent);
+router.delete('/:id', enforceCompanyContext, validateObjectId('id'), authorize('owner', 'admin', 'salesman'), deleteCalendarEvent);
+router.post('/report', enforceCompanyContext, authorize('salesman'), sendReport);
 
 module.exports = router;
 

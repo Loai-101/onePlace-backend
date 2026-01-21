@@ -1,4 +1,8 @@
 const Brand = require('../models/Brand');
+const { 
+  validateCompanyOwnership, 
+  buildCompanyQuery 
+} = require('../middleware/companyIsolation');
 
 // @desc    Get all brands
 // @route   GET /api/brands
@@ -7,7 +11,7 @@ const getBrands = async (req, res) => {
   try {
     const { includeInactive = false, featured = false, mainCategory } = req.query;
 
-    // Ensure user has a company
+    // STRICT ISOLATION: User MUST have a company
     if (!req.user || !req.user.company) {
       return res.status(403).json({
         success: false,
@@ -15,7 +19,8 @@ const getBrands = async (req, res) => {
       });
     }
 
-    let query = { company: req.user.company };
+    const companyId = req.user.company._id || req.user.company;
+    let query = buildCompanyQuery({}, companyId);
     if (!includeInactive) {
       query.isActive = true;
     }
@@ -65,7 +70,7 @@ const getBrands = async (req, res) => {
 // @access  Public
 const getFeaturedBrands = async (req, res) => {
   try {
-    // Ensure user has a company
+    // STRICT ISOLATION: User MUST have a company
     if (!req.user || !req.user.company) {
       return res.status(403).json({
         success: false,
@@ -73,11 +78,13 @@ const getFeaturedBrands = async (req, res) => {
       });
     }
 
-    const brands = await Brand.find({ 
-      isActive: true, 
-      isFeatured: true,
-      company: req.user.company
-    }).sort({ sortOrder: 1, name: 1 });
+    const companyId = req.user.company._id || req.user.company;
+    const brands = await Brand.find(
+      buildCompanyQuery({ 
+        isActive: true, 
+        isFeatured: true
+      }, companyId)
+    ).sort({ sortOrder: 1, name: 1 });
 
     res.status(200).json({
       success: true,
@@ -98,7 +105,7 @@ const getFeaturedBrands = async (req, res) => {
 // @access  Public
 const getBrandsWithCounts = async (req, res) => {
   try {
-    // Ensure user has a company
+    // STRICT ISOLATION: User MUST have a company
     if (!req.user || !req.user.company) {
       return res.status(403).json({
         success: false,
@@ -106,11 +113,16 @@ const getBrandsWithCounts = async (req, res) => {
       });
     }
 
-    const brands = await Brand.find({ company: req.user.company, isActive: true }).sort({ sortOrder: 1, name: 1 });
+    const companyId = req.user.company._id || req.user.company;
+    const brands = await Brand.find(
+      buildCompanyQuery({ isActive: true }, companyId)
+    ).sort({ sortOrder: 1, name: 1 });
     const Product = require('../models/Product');
     const brandsWithCounts = await Promise.all(
       brands.map(async (brand) => {
-        const productCount = await Product.countDocuments({ brand: brand._id, status: 'active', company: req.user.company });
+        const productCount = await Product.countDocuments(
+          buildCompanyQuery({ brand: brand._id, status: 'active' }, companyId)
+        );
         return {
           ...brand.toObject(),
           productCount
@@ -137,20 +149,35 @@ const getBrandsWithCounts = async (req, res) => {
 // @access  Public
 const getBrand = async (req, res) => {
   try {
-    const brand = await Brand.findById(req.params.id);
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    const brand = await Brand.findOne({
+      _id: req.params.id,
+      company: companyId
+    });
 
     if (!brand) {
       return res.status(404).json({
         success: false,
-        message: 'Brand not found'
+        message: 'Brand not found or access denied'
       });
     }
 
-    // Verify brand belongs to user's company
-    if (req.user && req.user.company && brand.company.toString() !== req.user.company.toString()) {
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(brand, companyId);
+    if (!ownershipCheck.valid) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Brand does not belong to your company.'
+        message: ownershipCheck.error || 'Access denied. This brand belongs to a different company.'
       });
     }
 
@@ -196,11 +223,14 @@ const createBrand = async (req, res) => {
       });
     }
 
-    // Check if brand name already exists for this company (case-insensitive)
-    const existingBrand = await Brand.findOne({ 
-      name: { $regex: new RegExp(`^${brandName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }, // Case-insensitive match, escape regex special chars
-      company: req.user.company 
-    });
+    const companyId = req.user.company._id || req.user.company;
+
+    // Check if brand name already exists for this company (case-insensitive, strict company scope)
+    const existingBrand = await Brand.findOne(
+      buildCompanyQuery({ 
+        name: { $regex: new RegExp(`^${brandName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+      }, companyId)
+    );
     
     if (existingBrand) {
       console.log('Duplicate brand found:', {
@@ -222,8 +252,8 @@ const createBrand = async (req, res) => {
       companyId: req.user.company.toString()
     });
     
-    // Set company field and normalize name
-    req.body.company = req.user.company;
+    // CRITICAL: Force company to user's company (prevent cross-company creation)
+    req.body.company = companyId;
     req.body.name = brandName; // Use trimmed name
     
     // Double-check company is set correctly
@@ -339,7 +369,7 @@ const createBrand = async (req, res) => {
 // @access  Private (Owner/Admin)
 const updateBrand = async (req, res) => {
   try {
-    // Ensure user has a company
+    // STRICT ISOLATION: User MUST have a company
     if (!req.user || !req.user.company) {
       return res.status(403).json({
         success: false,
@@ -347,20 +377,27 @@ const updateBrand = async (req, res) => {
       });
     }
 
-    // Check if brand exists and belongs to user's company
-    const existingBrand = await Brand.findById(req.params.id);
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    const existingBrand = await Brand.findOne({
+      _id: req.params.id,
+      company: companyId
+    });
+    
     if (!existingBrand) {
       return res.status(404).json({
         success: false,
-        message: 'Brand not found'
+        message: 'Brand not found or access denied'
       });
     }
 
-    // Verify brand belongs to user's company
-    if (existingBrand.company.toString() !== req.user.company.toString()) {
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(existingBrand, companyId);
+    if (!ownershipCheck.valid) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Brand does not belong to your company.'
+        message: ownershipCheck.error || 'Access denied. This brand belongs to a different company.'
       });
     }
 
@@ -373,11 +410,12 @@ const updateBrand = async (req, res) => {
       
       // Only check if the name actually changed (case-insensitive)
       if (newBrandName.toLowerCase() !== existingBrandName.toLowerCase()) {
-        const duplicateBrand = await Brand.findOne({ 
-          name: { $regex: new RegExp(`^${newBrandName}$`, 'i') }, // Case-insensitive match
-          company: req.user.company,
-          _id: { $ne: req.params.id } // Exclude current brand
-        });
+        const duplicateBrand = await Brand.findOne(
+          buildCompanyQuery({ 
+            name: { $regex: new RegExp(`^${newBrandName}$`, 'i') },
+            _id: { $ne: req.params.id }
+          }, companyId)
+        );
         
         if (duplicateBrand) {
           return res.status(400).json({
@@ -391,13 +429,27 @@ const updateBrand = async (req, res) => {
       req.body.name = newBrandName;
     }
 
-    // Prevent company from being changed
+    // CRITICAL: Prevent company from being changed
+    if (req.body.company && req.body.company.toString() !== companyId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Cannot change brand company.'
+      });
+    }
     delete req.body.company;
 
-    const brand = await Brand.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true
-    });
+    // Update with company filter to prevent cross-company updates
+    const brand = await Brand.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        company: companyId
+      },
+      req.body,
+      {
+        new: true,
+        runValidators: true
+      }
+    );
 
     if (!brand) {
       return res.status(404).json({
@@ -422,9 +474,10 @@ const updateBrand = async (req, res) => {
 // @desc    Delete brand
 // @route   DELETE /api/brands/:id
 // @access  Private (Owner/Admin)
+// @isolation STRICT - Verifies brand belongs to user's company before deletion
 const deleteBrand = async (req, res) => {
   try {
-    // Ensure user has a company
+    // STRICT ISOLATION: User MUST have a company
     if (!req.user || !req.user.company) {
       return res.status(403).json({
         success: false,
@@ -432,12 +485,27 @@ const deleteBrand = async (req, res) => {
       });
     }
 
-    const brand = await Brand.findById(req.params.id);
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    const brand = await Brand.findOne({
+      _id: req.params.id,
+      company: companyId
+    });
 
     if (!brand) {
       return res.status(404).json({
         success: false,
-        message: 'Brand not found'
+        message: 'Brand not found or access denied'
+      });
+    }
+
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(brand, companyId);
+    if (!ownershipCheck.valid) {
+      return res.status(403).json({
+        success: false,
+        message: ownershipCheck.error || 'Access denied. This brand belongs to a different company.'
       });
     }
 

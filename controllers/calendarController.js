@@ -2,6 +2,10 @@ const Calendar = require('../models/Calendar');
 const Account = require('../models/Account');
 const Company = require('../models/Company');
 const emailService = require('../services/emailService');
+const { 
+  validateCompanyOwnership, 
+  buildCompanyQuery 
+} = require('../middleware/companyIsolation');
 
 // @desc    Get all calendar events
 // @route   GET /api/calendar
@@ -17,13 +21,18 @@ const getCalendarEvents = async (req, res) => {
       salesman // Filter by salesman ID (for owner/admin)
     } = req.query;
 
-    // Build query
-    let query = {};
-
-    // Filter by user's company
-    if (req.user.company) {
-      query.company = req.user.company;
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
     }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Build company-scoped query - CRITICAL for data isolation
+    let query = buildCompanyQuery({}, companyId);
 
     // Filter by createdBy (salesman)
     if (req.user.role === 'salesman') {
@@ -87,7 +96,21 @@ const getCalendarEvents = async (req, res) => {
 // @access  Private
 const getCalendarEvent = async (req, res) => {
   try {
-    const event = await Calendar.findById(req.params.id)
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    const event = await Calendar.findOne({
+      _id: req.params.id,
+      company: companyId
+    })
       .populate('account', 'name phone email address')
       .populate('createdBy', 'name email')
       .populate('company', 'name');
@@ -95,7 +118,16 @@ const getCalendarEvent = async (req, res) => {
     if (!event) {
       return res.status(404).json({
         success: false,
-        message: 'Calendar event not found'
+        message: 'Calendar event not found or access denied'
+      });
+    }
+
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(event, companyId);
+    if (!ownershipCheck.valid) {
+      return res.status(403).json({
+        success: false,
+        message: ownershipCheck.error || 'Access denied. This event belongs to a different company.'
       });
     }
 
@@ -211,8 +243,17 @@ const createCalendarEvent = async (req, res) => {
             message: 'Account not found'
           });
         }
-        // Verify account belongs to user's company
-        if (accountDoc.company && accountDoc.company.toString() !== req.user.company?.toString()) {
+        // STRICT ISOLATION: Verify account belongs to user's company
+        if (!req.user || !req.user.company) {
+          return res.status(403).json({
+            success: false,
+            message: 'Access denied. User must be associated with a company.'
+          });
+        }
+
+        const companyId = req.user.company._id || req.user.company;
+
+        if (accountDoc.company && accountDoc.company.toString() !== companyId.toString()) {
           return res.status(403).json({
             success: false,
             message: 'Account does not belong to your company'
@@ -242,7 +283,7 @@ const createCalendarEvent = async (req, res) => {
       accountName: type === 'visit' ? accountName : null,
       description: description || '',
       createdBy: req.user._id,
-      company: req.user.company
+      company: companyId  // Use the companyId from above
     });
 
     const populatedEvent = await Calendar.findById(event._id)
@@ -265,33 +306,39 @@ const createCalendarEvent = async (req, res) => {
 // @desc    Update calendar event
 // @route   PUT /api/calendar/:id
 // @access  Private
+// @isolation STRICT - Verifies event belongs to user's company before update
 const updateCalendarEvent = async (req, res) => {
   try {
-    const event = await Calendar.findById(req.params.id);
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    const event = await Calendar.findOne({
+      _id: req.params.id,
+      company: companyId
+    });
 
     if (!event) {
       return res.status(404).json({
         success: false,
-        message: 'Calendar event not found'
+        message: 'Calendar event not found or access denied'
       });
     }
 
-    // Check company access
-    if (event.company) {
-      let companyId;
-      if (typeof event.company === 'object' && event.company._id) {
-        companyId = event.company._id.toString();
-      } else {
-        companyId = event.company.toString();
-      }
-      
-      const userCompanyId = req.user.company?.toString();
-      if (companyId !== userCompanyId) {
-        return res.status(403).json({
-          success: false,
-          message: 'Not authorized to update this event'
-        });
-      }
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(event, companyId);
+    if (!ownershipCheck.valid) {
+      return res.status(403).json({
+        success: false,
+        message: ownershipCheck.error || 'Access denied. This event belongs to a different company.'
+      });
     }
 
     // Check permissions for salesmen - they can only update their own events
@@ -358,8 +405,8 @@ const updateCalendarEvent = async (req, res) => {
               message: 'Account not found'
             });
           }
-          // Verify account belongs to user's company
-          if (accountDoc.company && accountDoc.company.toString() !== req.user.company?.toString()) {
+          // STRICT ISOLATION: Verify account belongs to user's company
+          if (accountDoc.company && accountDoc.company.toString() !== companyId.toString()) {
             return res.status(403).json({
               success: false,
               message: 'Account does not belong to your company'
@@ -406,33 +453,39 @@ const updateCalendarEvent = async (req, res) => {
 // @desc    Delete calendar event
 // @route   DELETE /api/calendar/:id
 // @access  Private
+// @isolation STRICT - Verifies event belongs to user's company before deletion
 const deleteCalendarEvent = async (req, res) => {
   try {
-    const event = await Calendar.findById(req.params.id);
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    const event = await Calendar.findOne({
+      _id: req.params.id,
+      company: companyId
+    });
 
     if (!event) {
       return res.status(404).json({
         success: false,
-        message: 'Calendar event not found'
+        message: 'Calendar event not found or access denied'
       });
     }
 
-    // Check company access
-    if (event.company) {
-      let companyId;
-      if (typeof event.company === 'object' && event.company._id) {
-        companyId = event.company._id.toString();
-      } else {
-        companyId = event.company.toString();
-      }
-      
-      const userCompanyId = req.user.company?.toString();
-      if (companyId !== userCompanyId) {
-        return res.status(403).json({
-          success: false,
-          message: 'Not authorized to delete this event'
-        });
-      }
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(event, companyId);
+    if (!ownershipCheck.valid) {
+      return res.status(403).json({
+        success: false,
+        message: ownershipCheck.error || 'Access denied. This event belongs to a different company.'
+      });
     }
 
     // Check permissions for salesmen - they can only delete their own events

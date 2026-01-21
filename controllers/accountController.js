@@ -1,6 +1,10 @@
 const Account = require('../models/Account');
 const Company = require('../models/Company');
 const XLSX = require('xlsx');
+const { 
+  validateCompanyOwnership, 
+  buildCompanyQuery 
+} = require('../middleware/companyIsolation');
 
 // Medical branches and their specializations
 const MEDICAL_BRANCHES = {
@@ -225,18 +229,20 @@ const getMedicalBranches = async (req, res) => {
 // @desc    Get all accounts for a company
 // @route   GET /api/accounts
 // @access  Private (Owner/Admin/Salesman/Accountant)
+// @isolation STRICT - Only returns accounts for user's company
 const getAccounts = async (req, res) => {
   try {
-    let query = {};
-    
-    // Filter by user's company for all roles
+    // STRICT ISOLATION: User MUST have a company
     if (!req.user.company) {
-      return res.status(404).json({
+      return res.status(403).json({
         success: false,
-        message: 'User is not associated with a company'
+        message: 'Access denied. User must be associated with a company.'
       });
     }
-    query.company = req.user.company;
+
+    // Build company-scoped query - CRITICAL for data isolation
+    const companyId = req.user.company._id || req.user.company;
+    let query = buildCompanyQuery({}, companyId);
 
     // Filter by status if provided
     if (req.query.status) {
@@ -268,23 +274,38 @@ const getAccounts = async (req, res) => {
 // @desc    Get single account
 // @route   GET /api/accounts/:id
 // @access  Private (Owner/Admin)
+// @isolation STRICT - Verifies account belongs to user's company
 const getAccount = async (req, res) => {
   try {
-    const account = await Account.findById(req.params.id)
-      .populate('company', 'name email');
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    const account = await Account.findOne({
+      _id: req.params.id,
+      company: companyId
+    }).populate('company', 'name email');
 
     if (!account) {
       return res.status(404).json({
         success: false,
-        message: 'Account not found'
+        message: 'Account not found or access denied'
       });
     }
 
-    // Check if user has access to this account's company (all roles)
-    if (account.company._id.toString() !== req.user.company?.toString()) {
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(account, companyId);
+    if (!ownershipCheck.valid) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. You can only access accounts from your company.'
+        message: ownershipCheck.error || 'Access denied. This account belongs to a different company.'
       });
     }
 
@@ -304,14 +325,32 @@ const getAccount = async (req, res) => {
 // @desc    Create new account
 // @route   POST /api/accounts
 // @access  Private (Owner/Admin)
+// @isolation STRICT - Forces account to be created for user's company only
 const createAccount = async (req, res) => {
   try {
-    // Verify company exists
-    const company = await Company.findById(req.user.company);
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+
+    // Verify company exists and is active
+    const company = await Company.findById(companyId);
     if (!company) {
       return res.status(404).json({
         success: false,
         message: 'Company not found'
+      });
+    }
+
+    if (!company.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your company account is inactive. Please contact your administrator.'
       });
     }
 
@@ -340,9 +379,11 @@ const createAccount = async (req, res) => {
       }
     }
 
+    // CRITICAL: Force company to user's company (prevent cross-company creation)
+    // Override any company field in request body
     const accountData = {
       ...req.body,
-      company: req.user.company
+      company: companyId  // Always use authenticated user's company
     };
 
     const account = await Account.create(accountData);
@@ -374,24 +415,51 @@ const createAccount = async (req, res) => {
 // @desc    Update account
 // @route   PUT /api/accounts/:id
 // @access  Private (Owner/Admin)
+// @isolation STRICT - Verifies account belongs to user's company before update
 const updateAccount = async (req, res) => {
   try {
-    let account = await Account.findById(req.params.id);
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    let account = await Account.findOne({
+      _id: req.params.id,
+      company: companyId
+    });
 
     if (!account) {
       return res.status(404).json({
         success: false,
-        message: 'Account not found'
+        message: 'Account not found or access denied'
       });
     }
 
-    // Check if user has access to this account's company
-    if (account.company.toString() !== req.user.company?.toString()) {
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(account, companyId);
+    if (!ownershipCheck.valid) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied'
+        message: ownershipCheck.error || 'Access denied. This account belongs to a different company.'
       });
     }
+
+    // CRITICAL: Prevent company field from being changed
+    if (req.body.company && req.body.company.toString() !== companyId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Cannot change account company.'
+      });
+    }
+
+    // Ensure company remains set to user's company
+    req.body.company = companyId;
 
     // Validate staff and their medical branches if provided
     if (req.body.staff) {
@@ -420,8 +488,12 @@ const updateAccount = async (req, res) => {
       }
     }
 
-    account = await Account.findByIdAndUpdate(
-      req.params.id,
+    // Update with company filter to prevent cross-company updates
+    account = await Account.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        company: companyId
+      },
       req.body,
       {
         new: true,
@@ -456,26 +528,46 @@ const updateAccount = async (req, res) => {
 // @desc    Delete account
 // @route   DELETE /api/accounts/:id
 // @access  Private (Owner/Admin)
+// @isolation STRICT - Verifies account belongs to user's company before deletion
 const deleteAccount = async (req, res) => {
   try {
-    const account = await Account.findById(req.params.id);
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    const account = await Account.findOne({
+      _id: req.params.id,
+      company: companyId
+    });
 
     if (!account) {
       return res.status(404).json({
         success: false,
-        message: 'Account not found'
+        message: 'Account not found or access denied'
       });
     }
 
-    // Check if user has access to this account's company
-    if (account.company.toString() !== req.user.company?.toString()) {
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(account, companyId);
+    if (!ownershipCheck.valid) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied'
+        message: ownershipCheck.error || 'Access denied. This account belongs to a different company.'
       });
     }
 
-    await Account.findByIdAndDelete(req.params.id);
+    // Delete with company filter to prevent cross-company deletion
+    await Account.findOneAndDelete({
+      _id: req.params.id,
+      company: companyId
+    });
 
     res.status(200).json({
       success: true,
@@ -493,22 +585,38 @@ const deleteAccount = async (req, res) => {
 // @desc    Toggle account active status
 // @route   PATCH /api/accounts/:id/toggle-status
 // @access  Private (Owner/Admin)
+// @isolation STRICT - Verifies account belongs to user's company
 const toggleAccountStatus = async (req, res) => {
   try {
-    const account = await Account.findById(req.params.id);
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    const account = await Account.findOne({
+      _id: req.params.id,
+      company: companyId
+    });
 
     if (!account) {
       return res.status(404).json({
         success: false,
-        message: 'Account not found'
+        message: 'Account not found or access denied'
       });
     }
 
-    // Check if user has access to this account's company
-    if (account.company.toString() !== req.user.company?.toString()) {
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(account, companyId);
+    if (!ownershipCheck.valid) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied'
+        message: ownershipCheck.error || 'Access denied. This account belongs to a different company.'
       });
     }
 
@@ -678,11 +786,10 @@ const bulkImportAccounts = async (req, res) => {
           }
         };
 
-        // Check for duplicate name within company
-        const existingAccount = await Account.findOne({
-          company: company,
-          name: accountData.name
-        });
+        // Check for duplicate name within company (strict company scope)
+        const existingAccount = await Account.findOne(
+          buildCompanyQuery({ name: accountData.name }, company)
+        );
 
         if (existingAccount) {
           results.failed++;

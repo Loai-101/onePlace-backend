@@ -11,6 +11,7 @@ const {
   bulkImportCategories
 } = require('../controllers/categoryController');
 const { protect, authorize } = require('../middleware/auth');
+const { enforceCompanyContext } = require('../middleware/companyIsolation');
 const { validateCategory, validateObjectId, validatePagination } = require('../middleware/validation');
 
 // Configure multer for Excel file upload
@@ -46,16 +47,16 @@ const router = express.Router();
 // All routes require authentication (categories are company-specific)
 router.use(protect);
 
-// Public authenticated routes (all users with company can access)
-router.get('/', getCategories);
-router.get('/tree', getCategoryTree);
-router.get('/:id', validateObjectId('id'), getCategory);
-router.get('/:id/products', validateObjectId('id'), validatePagination, getCategoryProducts);
+// Public authenticated routes (all users with company can access) - STRICT COMPANY ISOLATION
+router.get('/', enforceCompanyContext, getCategories);
+router.get('/tree', enforceCompanyContext, getCategoryTree);
+router.get('/:id', enforceCompanyContext, validateObjectId('id'), getCategory);
+router.get('/:id/products', enforceCompanyContext, validateObjectId('id'), validatePagination, getCategoryProducts);
 
-// Owner/Admin only routes
-router.post('/', authorize('owner', 'admin'), validateCategory, createCategory);
-router.post('/bulk-import', authorize('owner', 'admin'), uploadExcel, bulkImportCategories);
-router.put('/:id', authorize('owner', 'admin'), validateObjectId('id'), updateCategory);
-router.delete('/:id', authorize('owner', 'admin'), validateObjectId('id'), deleteCategory);
+// Owner/Admin only routes - STRICT COMPANY ISOLATION
+router.post('/', enforceCompanyContext, authorize('owner', 'admin'), validateCategory, createCategory);
+router.post('/bulk-import', enforceCompanyContext, authorize('owner', 'admin'), uploadExcel, bulkImportCategories);
+router.put('/:id', enforceCompanyContext, authorize('owner', 'admin'), validateObjectId('id'), updateCategory);
+router.delete('/:id', enforceCompanyContext, authorize('owner', 'admin'), validateObjectId('id'), deleteCategory);
 
 module.exports = router;

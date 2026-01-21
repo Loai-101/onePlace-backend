@@ -2,6 +2,10 @@ const Report = require('../models/Report');
 const User = require('../models/User');
 const Company = require('../models/Company');
 const { uploadFile } = require('../utils/supabase');
+const { 
+  validateCompanyOwnership, 
+  buildCompanyQuery 
+} = require('../middleware/companyIsolation');
 
 // Import jsPDF - try different import methods for v3 and v4 compatibility
 let jsPDF;
@@ -43,6 +47,16 @@ const uploadReport = async (req, res) => {
       });
     }
 
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+
     // Get salesman and company info
     const salesman = await User.findById(req.user.id);
     if (!salesman) {
@@ -52,7 +66,15 @@ const uploadReport = async (req, res) => {
       });
     }
 
-    const company = await Company.findById(req.user.company);
+    // Verify salesman belongs to user's company
+    if (salesman.company?.toString() !== companyId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Salesman does not belong to your company.'
+      });
+    }
+
+    const company = await Company.findById(companyId);
     if (!company) {
       return res.status(404).json({
         success: false,
@@ -84,7 +106,7 @@ const uploadReport = async (req, res) => {
     const report = await Report.create({
       salesman: req.user.id,
       salesmanName: salesman.name,
-      company: req.user.company,
+      company: companyId,
       title: title.trim(),
       description: description ? description.trim() : '',
       reportType: 'file',
@@ -282,7 +304,7 @@ const createPdfReport = async (req, res) => {
     const report = await Report.create({
       salesman: req.user.id,
       salesmanName: salesman.name,
-      company: req.user.company,
+      company: companyId,
       title: title.trim(),
       description: description.trim(),
       reportType: 'pdf',
@@ -328,14 +350,19 @@ const getReports = async (req, res) => {
 
     const { salesman, startDate, endDate } = req.query;
 
-    // Build query - filter by company first
-    let query = { company: req.user.company };
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Build query - filter by company first (strict isolation)
+    let query = buildCompanyQuery({}, companyId);
 
     // Filter by salesman (must be from same company)
     if (salesman && salesman !== 'all') {
-      // Verify salesman belongs to user's company
-      const salesmanUser = await User.findById(salesman);
-      if (salesmanUser && salesmanUser.company.toString() === req.user.company.toString()) {
+      // Verify salesman belongs to user's company (strict company filter)
+      const salesmanUser = await User.findOne({
+        _id: salesman,
+        company: companyId
+      });
+      if (salesmanUser) {
         query.salesman = salesman;
       } else {
         // Salesman doesn't belong to company, return empty results
@@ -385,34 +412,37 @@ const getReports = async (req, res) => {
 // @access  Private (Owner or Salesman who created it)
 const getReport = async (req, res) => {
   try {
-    const report = await Report.findById(req.params.id)
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    const report = await Report.findOne({
+      _id: req.params.id,
+      company: companyId
+    })
       .populate('salesman', 'name email')
       .populate('company', 'name');
 
     if (!report) {
       return res.status(404).json({
         success: false,
-        message: 'Report not found'
+        message: 'Report not found or access denied'
       });
     }
 
-    // Verify report belongs to user's company
-    if (req.user.company && report.company) {
-      const reportCompanyId = typeof report.company === 'object' 
-        ? report.company._id || report.company 
-        : report.company;
-      
-      if (reportCompanyId.toString() !== req.user.company.toString()) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied. Report does not belong to your company.'
-        });
-      }
-    } else if (req.user.company && !report.company) {
-      // Report missing company field (old data) - reject for security
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(report, companyId);
+    if (!ownershipCheck.valid) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Report is not associated with a company.'
+        message: ownershipCheck.error || 'Access denied. This report belongs to a different company.'
       });
     }
 
@@ -457,26 +487,37 @@ const deleteReport = async (req, res) => {
       });
     }
 
-    const report = await Report.findById(req.params.id);
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    const report = await Report.findOne({
+      _id: req.params.id,
+      company: companyId
+    });
 
     if (!report) {
       return res.status(404).json({
         success: false,
-        message: 'Report not found'
+        message: 'Report not found or access denied'
       });
     }
 
-    // Verify report belongs to user's company
-    if (report.company.toString() !== req.user.company.toString()) {
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(report, companyId);
+    if (!ownershipCheck.valid) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Report does not belong to your company.'
+        message: ownershipCheck.error || 'Access denied. This report belongs to a different company.'
       });
     }
 
     // TODO: Delete file from Supabase if needed
 
-    await Report.findByIdAndDelete(req.params.id);
+    // Delete with company filter to prevent cross-company deletion
+    await Report.findOneAndDelete({
+      _id: req.params.id,
+      company: companyId
+    });
 
     res.status(200).json({
       success: true,

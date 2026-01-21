@@ -1,5 +1,9 @@
 const User = require('../models/User');
 const Company = require('../models/Company');
+const { 
+  validateCompanyOwnership, 
+  buildCompanyQuery 
+} = require('../middleware/companyIsolation');
 
 // @desc    Get all users
 // @route   GET /api/users
@@ -16,17 +20,18 @@ const getUsers = async (req, res) => {
       order = 'asc'
     } = req.query;
 
-    // Build query
-    let query = {};
-
-    // Filter by user's company for all roles
-    if (!req.user.company) {
-      return res.status(404).json({
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
         success: false,
-        message: 'User is not associated with a company'
+        message: 'Access denied. User must be associated with a company.'
       });
     }
-    query.company = req.user.company;
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Build company-scoped query - CRITICAL for data isolation
+    let query = buildCompanyQuery({}, companyId);
 
     // Role filter
     if (role) {
@@ -34,7 +39,7 @@ const getUsers = async (req, res) => {
     }
 
     // Additional company filter (if provided, must match user's company)
-    if (company && company !== req.user.company.toString()) {
+    if (company && company !== companyId.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Access denied. You can only access users from your company.'
@@ -89,15 +94,39 @@ const getUsers = async (req, res) => {
 // @desc    Get single user
 // @route   GET /api/users/:id
 // @access  Private (Owner/Admin)
+// @isolation STRICT - Verifies user belongs to user's company
 const getUser = async (req, res) => {
   try {
-    const user = await User.findById(req.params.id)
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    const user = await User.findOne({
+      _id: req.params.id,
+      company: companyId
+    })
       .populate('company', 'name location contactInfo');
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'User not found'
+        message: 'User not found or access denied'
+      });
+    }
+
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(user, companyId);
+    if (!ownershipCheck.valid) {
+      return res.status(403).json({
+        success: false,
+        message: ownershipCheck.error || 'Access denied. This user belongs to a different company.'
       });
     }
 
@@ -117,9 +146,26 @@ const getUser = async (req, res) => {
 // @desc    Create new user
 // @route   POST /api/users
 // @access  Private (Owner/Admin)
+// @isolation STRICT - Forces user to be created for user's company only
 const createUser = async (req, res) => {
   try {
-    const user = await User.create(req.body);
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+
+    // CRITICAL: Force company to user's company (prevent cross-company creation)
+    const userData = {
+      ...req.body,
+      company: companyId  // Always override any company field in request
+    };
+
+    const user = await User.create(userData);
 
     res.status(201).json({
       success: true,
@@ -137,19 +183,62 @@ const createUser = async (req, res) => {
 // @desc    Update user
 // @route   PUT /api/users/:id
 // @access  Private (Owner/Admin)
+// @isolation STRICT - Verifies user belongs to user's company before update
 const updateUser = async (req, res) => {
   try {
-    const user = await User.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true
-    });
-
-    if (!user) {
-      return res.status(404).json({
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
         success: false,
-        message: 'User not found'
+        message: 'Access denied. User must be associated with a company.'
       });
     }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    const existingUser = await User.findOne({
+      _id: req.params.id,
+      company: companyId
+    });
+
+    if (!existingUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found or access denied'
+      });
+    }
+
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(existingUser, companyId);
+    if (!ownershipCheck.valid) {
+      return res.status(403).json({
+        success: false,
+        message: ownershipCheck.error || 'Access denied. This user belongs to a different company.'
+      });
+    }
+
+    // CRITICAL: Prevent company from being changed
+    if (req.body.company && req.body.company.toString() !== companyId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Cannot change user company.'
+      });
+    }
+    delete req.body.company;
+
+    // Update with company filter to prevent cross-company updates
+    const user = await User.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        company: companyId
+      },
+      req.body,
+      {
+        new: true,
+        runValidators: true
+      }
+    );
 
     res.status(200).json({
       success: true,
@@ -167,14 +256,38 @@ const updateUser = async (req, res) => {
 // @desc    Delete user
 // @route   DELETE /api/users/:id
 // @access  Private (Owner/Admin)
+// @isolation STRICT - Verifies user belongs to user's company before deletion
 const deleteUser = async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+    
+    // Query with company filter FIRST - prevents cross-company access
+    const user = await User.findOne({
+      _id: req.params.id,
+      company: companyId
+    });
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'User not found'
+        message: 'User not found or access denied'
+      });
+    }
+
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(user, companyId);
+    if (!ownershipCheck.valid) {
+      return res.status(403).json({
+        success: false,
+        message: ownershipCheck.error || 'Access denied. This user belongs to a different company.'
       });
     }
 
@@ -206,16 +319,39 @@ const deleteUser = async (req, res) => {
 // @desc    Update user permissions
 // @route   PATCH /api/users/:id/permissions
 // @access  Private (Owner/Admin)
+// @isolation STRICT - Verifies user belongs to user's company
 const updateUserPermissions = async (req, res) => {
   try {
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
     const { permissions } = req.body;
 
-    const user = await User.findById(req.params.id);
+    // Query with company filter FIRST - prevents cross-company access
+    const user = await User.findOne({
+      _id: req.params.id,
+      company: companyId
+    });
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'User not found'
+        message: 'User not found or access denied'
+      });
+    }
+
+    // Double-check ownership (defense in depth)
+    const ownershipCheck = validateCompanyOwnership(user, companyId);
+    if (!ownershipCheck.valid) {
+      return res.status(403).json({
+        success: false,
+        message: ownershipCheck.error || 'Access denied. This user belongs to a different company.'
       });
     }
 
@@ -242,15 +378,28 @@ const getUsersByCompany = async (req, res) => {
   try {
     const { companyId } = req.params;
 
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const userCompanyId = req.user.company._id || req.user.company;
+
     // Ensure the requested company matches user's company
-    if (companyId !== req.user.company?.toString()) {
+    if (companyId !== userCompanyId.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Access denied. You can only access users from your company.'
       });
     }
 
-    const users = await User.find({ company: companyId, isActive: true })
+    // Query with company filter (strict isolation)
+    const users = await User.find(
+      buildCompanyQuery({ isActive: true }, userCompanyId)
+    )
       .select('name email role profile lastLogin')
       .sort({ name: 1 });
 
