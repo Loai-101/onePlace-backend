@@ -143,3 +143,21 @@ Thumbs.db
 # Build directories
 build/
 dist/
+
+# Internal, sensitive, and infrastructure-related documentation
+API_DOCUMENTATION.md
+API_STATUS.md
+EMAIL_DEBUG.md
+EMAIL_SETUP.md
+EMAIL_TROUBLESHOOTING.md
+HEALTH_CHECK_SETUP.md
+PERFORMANCE_OPTIMIZATION.md
+QUICK_FIX_LOGIN.md
+RATE_LIMIT_FIX.md
+RENDER_ENV_SETUP.md
+TROUBLESHOOTING.md
+tests/README.md
+
+# Keep public documentation:
+# - README.md
+# - SECURITY.md
