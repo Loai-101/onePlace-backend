@@ -50,15 +50,15 @@ router.route('/')
   .get(protect, enforceCompanyContext, authorize('owner', 'admin', 'salesman', 'accountant'), getAccounts)
   .post(protect, enforceCompanyContext, authorize('owner', 'admin'), createAccount);
 
+// Bulk import must be registered before /:id so "bulk-import" is never captured as an id
+router.post('/bulk-import', protect, enforceCompanyContext, authorize('owner', 'admin'), uploadExcel.single('file'), bulkImportAccounts);
+
+router.patch('/:id/toggle-status', protect, enforceCompanyContext, authorize('owner', 'admin'), toggleAccountStatus);
+
 router.route('/:id')
   .get(protect, enforceCompanyContext, authorize('owner', 'admin', 'salesman', 'accountant'), getAccount)
   .put(protect, enforceCompanyContext, authorize('owner', 'admin'), updateAccount)
   .delete(protect, enforceCompanyContext, authorize('owner', 'admin'), deleteAccount);
-
-router.patch('/:id/toggle-status', protect, enforceCompanyContext, authorize('owner', 'admin'), toggleAccountStatus);
-
-// Bulk import route (must be before /:id route)
-router.post('/bulk-import', protect, enforceCompanyContext, authorize('owner', 'admin'), uploadExcel.single('file'), bulkImportAccounts);
 
 module.exports = router;
 

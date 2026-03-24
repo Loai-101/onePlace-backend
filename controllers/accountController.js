@@ -204,10 +204,12 @@ function validateStaffForAccount(staff) {
   return { ok: true };
 }
 
-/** Match Excel headers despite BOM, extra spaces, and "Flat / Shop" vs "Flat/Shop". */
+/** Match Excel headers despite BOM, NBSP, extra spaces, and "Flat / Shop" vs "Flat/Shop". */
 function normalizeHeaderKey(key) {
   return String(key ?? '')
     .replace(/^\uFEFF/, '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
     .trim()
     .toLowerCase()
     .replace(/\s+/g, ' ')
@@ -317,6 +319,64 @@ function buildAddressFromImportRow(norm) {
     if (legacy.length) line = legacy.join(', ');
   }
   return distributeAddressLineIntoSchemaFields(line);
+}
+
+/**
+ * Build row objects from sheet: supports a title row above the real header row,
+ * and normalizes headers the same way as rowToNorm (fixes "Address" not mapping).
+ */
+function rowArrayToObject(headerRow, dataRow) {
+  const obj = {};
+  const hdr = headerRow || [];
+  const dat = dataRow || [];
+  for (let c = 0; c < hdr.length; c++) {
+    const h = normalizeHeaderKey(String(hdr[c] ?? ''));
+    if (!h) continue;
+    const v = dat[c];
+    obj[h] = v === undefined || v === null ? '' : v;
+  }
+  return obj;
+}
+
+function rowLooksLikeAccountData(row) {
+  const n = rowToNorm(row);
+  return !!(
+    getCell(n, 'name') ||
+    getCell(n, 'phone number', 'phone') ||
+    getCell(n, 'area') ||
+    getCell(n, 'vat number', 'vat') ||
+    getCell(n, 'address', 'addr', 'street')
+  );
+}
+
+function parseAccountSheet(worksheet) {
+  const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '', raw: false });
+  if (!rows || !rows.length) return [];
+
+  const objectsFromHeaderRow = (headerIndex) => {
+    const headerRow = rows[headerIndex];
+    if (!headerRow || !headerRow.length) return [];
+    const out = [];
+    for (let r = headerIndex + 1; r < rows.length; r++) {
+      const dataRow = rows[r] || [];
+      const hasAny = dataRow.some(
+        (cell) => cell !== '' && cell != null && String(cell).trim() !== ''
+      );
+      if (!hasAny) continue;
+      out.push(rowArrayToObject(headerRow, dataRow));
+    }
+    return out;
+  };
+
+  let data = objectsFromHeaderRow(0);
+  const ok0 = data.some(rowLooksLikeAccountData);
+  if (data.length && !ok0) {
+    const alt = objectsFromHeaderRow(1);
+    if (alt.some(rowLooksLikeAccountData)) {
+      data = alt;
+    }
+  }
+  return data;
 }
 
 // @desc    Get all specializations for a medical branch
@@ -758,11 +818,11 @@ const bulkImportAccounts = async (req, res) => {
       });
     }
 
-    // Parse Excel file
+    // Parse Excel file (header-aware: title row + real headers, normalized "Address" column)
     const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
-    const data = XLSX.utils.sheet_to_json(worksheet);
+    const data = parseAccountSheet(worksheet);
 
     if (!data || data.length === 0) {
       return res.status(400).json({
@@ -855,7 +915,7 @@ const bulkImportAccounts = async (req, res) => {
           company: companyId,
           name,
           phone,
-          email,
+          ...(email ? { email } : {}),
           address: {
             ...addressParts,
             area
