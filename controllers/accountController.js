@@ -222,145 +222,41 @@ function getCell(norm, ...aliases) {
   return '';
 }
 
-function normalizeStaffTitle(input) {
-  if (input === undefined || input === null || String(input).trim() === '') {
-    return 'Dr';
+/** Map one "Address" cell into schema fields (length limits per Account model). */
+function distributeAddressLineIntoSchemaFields(addressLine) {
+  const s = String(addressLine == null ? '' : addressLine).trim();
+  if (!s) {
+    return { flatShopNo: '', building: '', road: '', block: '' };
   }
-  const s = String(input).trim();
-  const l = s.toLowerCase();
-  if (l === 'dr' || l === 'dr.') return 'Dr';
-  if (l === 'mr' || l === 'mr.') return 'Mr';
-  if (l === 'miss' || l === 'ms' || l === 'ms.') return 'Miss';
-  if (['Dr', 'Mr', 'Miss'].includes(s)) return s;
-  return s;
+  let i = 0;
+  const take = (max) => {
+    const part = s.slice(i, i + max).trim();
+    i += max;
+    return part;
+  };
+  return {
+    flatShopNo: take(100),
+    building: take(200),
+    road: take(200),
+    block: take(50)
+  };
 }
 
-function resolveMedicalBranchKey(raw) {
-  if (!raw || !String(raw).trim()) return null;
-  const t = String(raw).trim();
-  const lower = t.toLowerCase();
-  if (MEDICAL_BRANCHES[lower]) return lower;
-  const asSlug = lower.replace(/\s+/g, '-');
-  if (MEDICAL_BRANCHES[asSlug]) return asSlug;
-  const byKey = Object.keys(MEDICAL_BRANCHES).find((k) => k.toLowerCase() === lower);
-  if (byKey) return byKey;
-  const flat = lower.replace(/-/g, ' ');
-  const byLabel = Object.keys(MEDICAL_BRANCHES).find(
-    (k) => k.replace(/-/g, ' ').toLowerCase() === flat
-  );
-  return byLabel || null;
-}
-
-const IMPORT_STAFF_SLOT_COUNT = 5;
-
-function parseStaffFromImportRow(norm) {
-  const fromSlots = [];
-
-  for (let n = 1; n <= IMPORT_STAFF_SLOT_COUNT; n++) {
-    const titleRaw = getCell(norm, `Staff ${n} Title`, `Staff${n} Title`, `Staff_${n}_Title`);
-    const title = normalizeStaffTitle(titleRaw);
-    const name = getCell(norm, `Staff ${n} Name`, `Staff${n} Name`, `Staff_${n}_Name`);
-    const phone = getCell(norm, `Staff ${n} Phone`, `Staff${n} Phone`, `Staff_${n}_Phone`);
-    const emailRaw = getCell(norm, `Staff ${n} Email`, `Staff${n} Email`, `Staff_${n}_Email`);
-    const branchRaw = getCell(
-      norm,
-      `Staff ${n} Medical Branch`,
-      `Staff ${n} MedicalBranch`,
-      `Staff${n} Medical Branch`,
-      `Staff${n} MedicalBranch`,
-      `Staff_${n}_Medical_Branch`
-    );
-    const specsRaw = getCell(
-      norm,
-      `Staff ${n} Specializations`,
-      `Staff${n} Specializations`,
-      `Staff_${n}_Specializations`
-    );
-
-    const hasSlotData = !!(branchRaw || name || phone || emailRaw || specsRaw || titleRaw);
-    if (!hasSlotData) continue;
-
-    const branchKey = resolveMedicalBranchKey(branchRaw);
-    const specializations = specsRaw
-      ? specsRaw.split(',').map((s) => s.trim()).filter(Boolean)
-      : [];
-
-    let email = emailRaw || undefined;
-    if (email && !/^\S+@\S+\.\S+$/.test(email)) {
-      email = undefined;
-    }
-
-    fromSlots.push({
-      title,
-      name: name || '',
-      phone: phone || '',
-      email,
-      medicalBranch: branchKey || (branchRaw ? branchRaw.trim().toLowerCase().replace(/\s+/g, '-') : ''),
-      specializations
-    });
+/**
+ * Bulk import: read Address + Area + business fields only; staff/logo added later in the app.
+ */
+function buildAddressFromImportRow(norm) {
+  let line = getCell(norm, 'address', 'street address', 'full address', 'location');
+  if (!line) {
+    const legacy = [
+      getCell(norm, 'flat/shop no.', 'flat shop no.'),
+      getCell(norm, 'building'),
+      getCell(norm, 'road'),
+      getCell(norm, 'block')
+    ].filter(Boolean);
+    if (legacy.length) line = legacy.join(', ');
   }
-
-  if (fromSlots.length > 0) {
-    return fromSlots;
-  }
-
-  const legacy = getCell(norm, 'Staff');
-  const fromLegacy = [];
-  if (!legacy) return fromLegacy;
-
-  try {
-    if (typeof legacy === 'string' && legacy.trim().startsWith('[')) {
-      const parsed = JSON.parse(legacy);
-      if (Array.isArray(parsed)) {
-        parsed.forEach((item) => {
-          if (item && typeof item === 'object') {
-            const brRaw = item.medicalBranch != null ? String(item.medicalBranch).trim() : '';
-            const br = resolveMedicalBranchKey(brRaw) || brRaw.toLowerCase().replace(/\s+/g, '-');
-            fromLegacy.push({
-              title: normalizeStaffTitle(item.title),
-              name: (item.name && String(item.name).trim()) || '',
-              phone: (item.phone && String(item.phone).trim()) || '',
-              email:
-                item.email && /^\S+@\S+\.\S+$/.test(String(item.email))
-                  ? String(item.email).trim()
-                  : undefined,
-              medicalBranch: br,
-              specializations: Array.isArray(item.specializations) ? item.specializations.map(String) : []
-            });
-          }
-        });
-      }
-    } else {
-      const staffEntries = String(legacy).split(';');
-      for (const entry of staffEntries) {
-        const staffParts = entry.trim().split('|');
-        const title = normalizeStaffTitle(staffParts[0]);
-        const name = (staffParts[1] && staffParts[1].trim()) || '';
-        const phone = (staffParts[2] && staffParts[2].trim()) || '';
-        let email = (staffParts[3] && staffParts[3].trim()) || undefined;
-        if (email && !/^\S+@\S+\.\S+$/.test(email)) email = undefined;
-        const branchRaw = (staffParts[4] && staffParts[4].trim()) || '';
-        const branchKey =
-          resolveMedicalBranchKey(branchRaw) ||
-          (branchRaw ? branchRaw.toLowerCase().replace(/\s+/g, '-') : '');
-        const specs =
-          staffParts[5] ? staffParts[5].split(',').map((s) => s.trim()).filter(Boolean) : [];
-        if (!name && !branchRaw) continue;
-        fromLegacy.push({
-          title,
-          name,
-          phone,
-          email,
-          medicalBranch: branchKey,
-          specializations: specs
-        });
-      }
-    }
-  } catch (e) {
-    // validation will surface empty/invalid staff
-  }
-
-  return fromLegacy;
+  return distributeAddressLineIntoSchemaFields(line);
 }
 
 // @desc    Get all specializations for a medical branch
@@ -852,24 +748,21 @@ const bulkImportAccounts = async (req, res) => {
         const name = getCell(norm, 'name');
         const phone = getCell(norm, 'phone number', 'phone');
         const area = getCell(norm, 'area');
-        const flatShopNo = getCell(norm, 'flat/shop no.', 'flat shop no.');
-        const building = getCell(norm, 'building');
-        const road = getCell(norm, 'road');
-        const block = getCell(norm, 'block');
         const vat = getCell(norm, 'vat number', 'vat');
         const crNumber = getCell(norm, 'cr number', 'cr');
         const creditRaw = getCell(norm, 'credit limit', 'creditlimit');
         const statusRaw = getCell(norm, 'status') || 'active';
         const emailRaw = getCell(norm, 'email');
 
+        const addressParts = buildAddressFromImportRow(norm);
+        const hasAddress =
+          !!(addressParts.flatShopNo || addressParts.building || addressParts.road || addressParts.block);
+
         const missingLabels = [];
         if (!name) missingLabels.push('Name');
         if (!phone) missingLabels.push('Phone Number');
         if (!area) missingLabels.push('Area');
-        if (!flatShopNo) missingLabels.push('Flat/Shop No.');
-        if (!building) missingLabels.push('Building');
-        if (!road) missingLabels.push('Road');
-        if (!block) missingLabels.push('Block');
+        if (!hasAddress) missingLabels.push('Address');
         if (!vat) missingLabels.push('VAT Number');
         if (!crNumber) missingLabels.push('CR Number');
         if (creditRaw === '') missingLabels.push('Credit Limit');
@@ -884,7 +777,7 @@ const bulkImportAccounts = async (req, res) => {
           continue;
         }
 
-        const creditLimit = parseFloat(creditRaw, 10);
+        const creditLimit = parseFloat(String(creditRaw).replace(/,/g, ''), 10);
         if (Number.isNaN(creditLimit) || creditLimit < 0) {
           results.failed++;
           results.errors.push({
@@ -900,31 +793,16 @@ const bulkImportAccounts = async (req, res) => {
           email = undefined;
         }
 
-        const staff = parseStaffFromImportRow(norm);
-        const staffCheck = validateStaffForAccount(staff);
-        if (!staffCheck.ok) {
-          results.failed++;
-          results.errors.push({
-            row: rowNumber,
-            name: name || 'N/A',
-            error: staffCheck.message
-          });
-          continue;
-        }
-
         const accountData = {
           company: companyId,
           name,
           phone,
           email,
           address: {
-            flatShopNo,
-            building,
-            road,
-            block,
+            ...addressParts,
             area
           },
-          staff,
+          staff: [],
           vat,
           crNumber,
           creditLimit,
