@@ -150,6 +150,15 @@ const createPdfReport = async (req, res) => {
       });
     }
 
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+
     // Get salesman and company info
     const salesman = await User.findById(req.user.id);
     if (!salesman) {
@@ -159,7 +168,7 @@ const createPdfReport = async (req, res) => {
       });
     }
 
-    const company = await Company.findById(req.user.company);
+    const company = await Company.findById(companyId);
     if (!company) {
       return res.status(404).json({
         success: false,

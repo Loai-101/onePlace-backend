@@ -113,14 +113,8 @@ const ensureBucketExists = async (bucketName, isPublic = true) => {
  * @param {String} folder - Folder path within bucket
  * @returns {Promise<Object>} Upload result with URL
  */
-const uploadFile = async (fileBuffer, fileName, bucket, folder = '', contentType = 'application/pdf') => {
-  try {
-    // Ensure bucket exists before uploading
-    const bucketExists = await ensureBucketExists(bucket, true);
-    if (!bucketExists) {
-      // Check if it's a connection/timeout issue
-      const errorMsg = `Failed to ensure bucket "${bucket}" exists. `;
-      const connectionIssue = `This might be due to:
+const bucketHelpMessage = (bucket) =>
+  `This might be due to:
 1. Network connectivity issues (check your internet connection)
 2. Supabase project might be paused (check your Supabase dashboard)
 3. DNS resolution issues (ERR_NAME_NOT_RESOLVED)
@@ -134,7 +128,14 @@ Please create the bucket "${bucket}" manually in your Supabase dashboard:
 - Create bucket: "${bucket}" (Public: Yes)
 
 Or check that your SUPABASE_SERVICE_ROLE key has the necessary permissions.`;
-      throw new Error(errorMsg + connectionIssue);
+
+const uploadFile = async (fileBuffer, fileName, bucket, folder = '', contentType = 'application/pdf') => {
+  try {
+    const bucketExists = await ensureBucketExists(bucket, true);
+    if (!bucketExists) {
+      console.warn(
+        `ensureBucketExists("${bucket}") returned false; attempting upload anyway (bucket may already exist).`
+      );
     }
 
     // Generate unique filename with timestamp
@@ -152,7 +153,16 @@ Or check that your SUPABASE_SERVICE_ROLE key has the necessary permissions.`;
       });
 
     if (error) {
-      throw new Error(`Supabase upload error: ${error.message}`);
+      const msg = error.message || '';
+      const looksLikeBucket =
+        /bucket|not found|does not exist|No such/i.test(msg) ||
+        msg.includes('404');
+      if (looksLikeBucket) {
+        throw new Error(
+          `Failed to upload to bucket "${bucket}": ${msg}. ` + bucketHelpMessage(bucket)
+        );
+      }
+      throw new Error(`Supabase upload error: ${msg}`);
     }
 
     // Get public URL

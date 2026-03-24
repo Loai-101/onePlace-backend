@@ -396,11 +396,9 @@ const getUsersByCompany = async (req, res) => {
       });
     }
 
-    // Query with company filter (strict isolation)
-    const users = await User.find(
-      buildCompanyQuery({ isActive: true }, userCompanyId)
-    )
-      .select('name email role profile lastLogin')
+    // Company members for pickers (e.g. report filters); include inactive so past salesmen still appear
+    const users = await User.find(buildCompanyQuery({}, userCompanyId))
+      .select('name email role profile lastLogin isActive')
       .sort({ name: 1 });
 
     res.status(200).json({
