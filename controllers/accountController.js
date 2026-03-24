@@ -176,6 +176,193 @@ const MEDICAL_BRANCHES = {
   'other': []
 };
 
+/**
+ * Same rules as POST /api/accounts — import must produce accounts the UI could create.
+ */
+function validateStaffForAccount(staff) {
+  if (!staff || !Array.isArray(staff) || staff.length === 0) {
+    return { ok: false, message: 'At least one staff member is required' };
+  }
+  for (let i = 0; i < staff.length; i++) {
+    const staffMember = staff[i];
+    if (!staffMember.medicalBranch) {
+      return { ok: false, message: `Medical branch is required for staff member ${i + 1}` };
+    }
+    if (!MEDICAL_BRANCHES[staffMember.medicalBranch]) {
+      return {
+        ok: false,
+        message: `Invalid medical branch "${staffMember.medicalBranch}" for staff member ${i + 1}`
+      };
+    }
+    if (!staffMember.title || !['Dr', 'Miss', 'Mr'].includes(staffMember.title)) {
+      return {
+        ok: false,
+        message: `Staff title must be Dr, Miss, or Mr for staff member ${i + 1}`
+      };
+    }
+  }
+  return { ok: true };
+}
+
+function rowToNorm(row) {
+  const norm = {};
+  for (const key of Object.keys(row)) {
+    norm[String(key).trim().toLowerCase()] = row[key];
+  }
+  return norm;
+}
+
+function getCell(norm, ...aliases) {
+  for (const a of aliases) {
+    const v = norm[a.trim().toLowerCase()];
+    if (v !== undefined && v !== null && String(v).trim() !== '') {
+      return String(v).trim();
+    }
+  }
+  return '';
+}
+
+function normalizeStaffTitle(input) {
+  if (input === undefined || input === null || String(input).trim() === '') {
+    return 'Dr';
+  }
+  const s = String(input).trim();
+  const l = s.toLowerCase();
+  if (l === 'dr' || l === 'dr.') return 'Dr';
+  if (l === 'mr' || l === 'mr.') return 'Mr';
+  if (l === 'miss' || l === 'ms' || l === 'ms.') return 'Miss';
+  if (['Dr', 'Mr', 'Miss'].includes(s)) return s;
+  return s;
+}
+
+function resolveMedicalBranchKey(raw) {
+  if (!raw || !String(raw).trim()) return null;
+  const t = String(raw).trim();
+  const lower = t.toLowerCase();
+  if (MEDICAL_BRANCHES[lower]) return lower;
+  const asSlug = lower.replace(/\s+/g, '-');
+  if (MEDICAL_BRANCHES[asSlug]) return asSlug;
+  const byKey = Object.keys(MEDICAL_BRANCHES).find((k) => k.toLowerCase() === lower);
+  if (byKey) return byKey;
+  const flat = lower.replace(/-/g, ' ');
+  const byLabel = Object.keys(MEDICAL_BRANCHES).find(
+    (k) => k.replace(/-/g, ' ').toLowerCase() === flat
+  );
+  return byLabel || null;
+}
+
+const IMPORT_STAFF_SLOT_COUNT = 5;
+
+function parseStaffFromImportRow(norm) {
+  const fromSlots = [];
+
+  for (let n = 1; n <= IMPORT_STAFF_SLOT_COUNT; n++) {
+    const titleRaw = getCell(norm, `Staff ${n} Title`, `Staff${n} Title`, `Staff_${n}_Title`);
+    const title = normalizeStaffTitle(titleRaw);
+    const name = getCell(norm, `Staff ${n} Name`, `Staff${n} Name`, `Staff_${n}_Name`);
+    const phone = getCell(norm, `Staff ${n} Phone`, `Staff${n} Phone`, `Staff_${n}_Phone`);
+    const emailRaw = getCell(norm, `Staff ${n} Email`, `Staff${n} Email`, `Staff_${n}_Email`);
+    const branchRaw = getCell(
+      norm,
+      `Staff ${n} Medical Branch`,
+      `Staff ${n} MedicalBranch`,
+      `Staff${n} Medical Branch`,
+      `Staff${n} MedicalBranch`,
+      `Staff_${n}_Medical_Branch`
+    );
+    const specsRaw = getCell(
+      norm,
+      `Staff ${n} Specializations`,
+      `Staff${n} Specializations`,
+      `Staff_${n}_Specializations`
+    );
+
+    const hasSlotData = !!(branchRaw || name || phone || emailRaw || specsRaw || titleRaw);
+    if (!hasSlotData) continue;
+
+    const branchKey = resolveMedicalBranchKey(branchRaw);
+    const specializations = specsRaw
+      ? specsRaw.split(',').map((s) => s.trim()).filter(Boolean)
+      : [];
+
+    let email = emailRaw || undefined;
+    if (email && !/^\S+@\S+\.\S+$/.test(email)) {
+      email = undefined;
+    }
+
+    fromSlots.push({
+      title,
+      name: name || '',
+      phone: phone || '',
+      email,
+      medicalBranch: branchKey || (branchRaw ? branchRaw.trim().toLowerCase().replace(/\s+/g, '-') : ''),
+      specializations
+    });
+  }
+
+  if (fromSlots.length > 0) {
+    return fromSlots;
+  }
+
+  const legacy = getCell(norm, 'Staff');
+  const fromLegacy = [];
+  if (!legacy) return fromLegacy;
+
+  try {
+    if (typeof legacy === 'string' && legacy.trim().startsWith('[')) {
+      const parsed = JSON.parse(legacy);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((item) => {
+          if (item && typeof item === 'object') {
+            const brRaw = item.medicalBranch != null ? String(item.medicalBranch).trim() : '';
+            const br = resolveMedicalBranchKey(brRaw) || brRaw.toLowerCase().replace(/\s+/g, '-');
+            fromLegacy.push({
+              title: normalizeStaffTitle(item.title),
+              name: (item.name && String(item.name).trim()) || '',
+              phone: (item.phone && String(item.phone).trim()) || '',
+              email:
+                item.email && /^\S+@\S+\.\S+$/.test(String(item.email))
+                  ? String(item.email).trim()
+                  : undefined,
+              medicalBranch: br,
+              specializations: Array.isArray(item.specializations) ? item.specializations.map(String) : []
+            });
+          }
+        });
+      }
+    } else {
+      const staffEntries = String(legacy).split(';');
+      for (const entry of staffEntries) {
+        const staffParts = entry.trim().split('|');
+        const title = normalizeStaffTitle(staffParts[0]);
+        const name = (staffParts[1] && staffParts[1].trim()) || '';
+        const phone = (staffParts[2] && staffParts[2].trim()) || '';
+        let email = (staffParts[3] && staffParts[3].trim()) || undefined;
+        if (email && !/^\S+@\S+\.\S+$/.test(email)) email = undefined;
+        const branchRaw = (staffParts[4] && staffParts[4].trim()) || '';
+        const branchKey =
+          resolveMedicalBranchKey(branchRaw) ||
+          (branchRaw ? branchRaw.toLowerCase().replace(/\s+/g, '-') : '');
+        const specs =
+          staffParts[5] ? staffParts[5].split(',').map((s) => s.trim()).filter(Boolean) : [];
+        if (!name && !branchRaw) continue;
+        fromLegacy.push({
+          title,
+          name,
+          phone,
+          email,
+          medicalBranch: branchKey,
+          specializations: specs
+        });
+      }
+    }
+  } catch (e) {
+    // validation will surface empty/invalid staff
+  }
+
+  return fromLegacy;
+}
+
 // @desc    Get all specializations for a medical branch
 // @route   GET /api/accounts/specializations/:branch
 // @access  Private
@@ -354,29 +541,12 @@ const createAccount = async (req, res) => {
       });
     }
 
-    // Validate staff and their medical branches
-    if (!req.body.staff || !Array.isArray(req.body.staff) || req.body.staff.length === 0) {
+    const staffCheck = validateStaffForAccount(req.body.staff);
+    if (!staffCheck.ok) {
       return res.status(400).json({
         success: false,
-        message: 'At least one staff member is required'
+        message: staffCheck.message
       });
-    }
-
-    // Validate each staff member's medical branch
-    for (let i = 0; i < req.body.staff.length; i++) {
-      const staffMember = req.body.staff[i];
-      if (!staffMember.medicalBranch) {
-        return res.status(400).json({
-          success: false,
-          message: `Medical branch is required for staff member ${i + 1}`
-        });
-      }
-      if (!MEDICAL_BRANCHES[staffMember.medicalBranch]) {
-        return res.status(400).json({
-          success: false,
-          message: `Invalid medical branch "${staffMember.medicalBranch}" for staff member ${i + 1}`
-        });
-      }
     }
 
     // CRITICAL: Force company to user's company (prevent cross-company creation)
@@ -461,30 +631,13 @@ const updateAccount = async (req, res) => {
     // Ensure company remains set to user's company
     req.body.company = companyId;
 
-    // Validate staff and their medical branches if provided
     if (req.body.staff) {
-      if (!Array.isArray(req.body.staff) || req.body.staff.length === 0) {
+      const staffCheck = validateStaffForAccount(req.body.staff);
+      if (!staffCheck.ok) {
         return res.status(400).json({
           success: false,
-          message: 'At least one staff member is required'
+          message: staffCheck.message
         });
-      }
-
-      // Validate each staff member's medical branch
-      for (let i = 0; i < req.body.staff.length; i++) {
-        const staffMember = req.body.staff[i];
-        if (!staffMember.medicalBranch) {
-          return res.status(400).json({
-            success: false,
-            message: `Medical branch is required for staff member ${i + 1}`
-          });
-        }
-        if (!MEDICAL_BRANCHES[staffMember.medicalBranch]) {
-          return res.status(400).json({
-            success: false,
-            message: `Invalid medical branch "${staffMember.medicalBranch}" for staff member ${i + 1}`
-          });
-        }
       }
     }
 
@@ -668,127 +821,122 @@ const bulkImportAccounts = async (req, res) => {
       errors: []
     };
 
-    // Get user's company
-    const company = req.user.company;
-    if (!company) {
+    if (!req.user.company) {
       return res.status(400).json({
         success: false,
         message: 'User must be associated with a company'
       });
     }
 
-    // Process each row
+    const companyId = req.user.company._id || req.user.company;
+    const companyDoc = await Company.findById(companyId);
+    if (!companyDoc) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+    if (!companyDoc.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your company account is inactive. Please contact your administrator.'
+      });
+    }
+
     for (let i = 0; i < data.length; i++) {
       const row = data[i];
-      const rowNumber = i + 2; // +2 because row 1 is header, and arrays are 0-indexed
+      const rowNumber = i + 2;
+      const norm = rowToNorm(row);
 
       try {
-        // Validate required fields
-        const requiredFields = {
-          'Name': row['Name'],
-          'Phone Number': row['Phone Number'],
-          'Area': row['Area'],
-          'Flat/Shop No.': row['Flat/Shop No.'],
-          'Building': row['Building'],
-          'Road': row['Road'],
-          'Block': row['Block'],
-          'VAT Number': row['VAT Number'],
-          'CR Number': row['CR Number'],
-          'Credit Limit': row['Credit Limit'],
-          'Status': row['Status']
-        };
+        const name = getCell(norm, 'name');
+        const phone = getCell(norm, 'phone number', 'phone');
+        const area = getCell(norm, 'area');
+        const flatShopNo = getCell(norm, 'flat/shop no.', 'flat shop no.');
+        const building = getCell(norm, 'building');
+        const road = getCell(norm, 'road');
+        const block = getCell(norm, 'block');
+        const vat = getCell(norm, 'vat number', 'vat');
+        const crNumber = getCell(norm, 'cr number', 'cr');
+        const creditRaw = getCell(norm, 'credit limit', 'creditlimit');
+        const statusRaw = getCell(norm, 'status') || 'active';
+        const emailRaw = getCell(norm, 'email');
 
-        const missingFields = Object.keys(requiredFields).filter(field => {
-          const value = requiredFields[field];
-          return value === undefined || value === null || String(value).trim() === '';
-        });
+        const missingLabels = [];
+        if (!name) missingLabels.push('Name');
+        if (!phone) missingLabels.push('Phone Number');
+        if (!area) missingLabels.push('Area');
+        if (!flatShopNo) missingLabels.push('Flat/Shop No.');
+        if (!building) missingLabels.push('Building');
+        if (!road) missingLabels.push('Road');
+        if (!block) missingLabels.push('Block');
+        if (!vat) missingLabels.push('VAT Number');
+        if (!crNumber) missingLabels.push('CR Number');
+        if (creditRaw === '') missingLabels.push('Credit Limit');
 
-        if (missingFields.length > 0) {
+        if (missingLabels.length > 0) {
           results.failed++;
           results.errors.push({
             row: rowNumber,
-            name: row['Name'] || 'N/A',
-            error: `Missing required fields: ${missingFields.join(', ')}`
+            name: name || 'N/A',
+            error: `Missing required fields: ${missingLabels.join(', ')}`
           });
           continue;
         }
 
-        // Parse staff (optional - can be added manually later)
-        let staff = [];
-        if (row['Staff'] && String(row['Staff']).trim()) {
-          try {
-            // Try parsing as JSON first
-            if (typeof row['Staff'] === 'string' && row['Staff'].startsWith('[')) {
-              staff = JSON.parse(row['Staff']);
-            } else {
-              // Otherwise, treat as single staff member or semicolon-separated multiple
-              // Format: Title|Name|Phone|Email|MedicalBranch|Specializations
-              const staffEntries = String(row['Staff']).split(';');
-              staff = staffEntries.map(entry => {
-                const staffParts = entry.trim().split('|');
-                return {
-                  title: staffParts[0]?.trim() || 'Dr',
-                  name: staffParts[1]?.trim() || '',
-                  phone: staffParts[2]?.trim() || '',
-                  email: staffParts[3]?.trim() || '', // Optional email
-                  medicalBranch: staffParts[4]?.trim() || '',
-                  specializations: staffParts[5] ? staffParts[5].split(',').map(s => s.trim()).filter(Boolean) : []
-                };
-              }).filter(s => s.name || s.medicalBranch); // Only include if has name or branch
-            }
-          } catch (e) {
-            // If parsing fails, skip staff (it's optional)
-            staff = [];
-          }
+        const creditLimit = parseFloat(creditRaw, 10);
+        if (Number.isNaN(creditLimit) || creditLimit < 0) {
+          results.failed++;
+          results.errors.push({
+            row: rowNumber,
+            name: name || 'N/A',
+            error: 'Credit Limit must be a number ≥ 0'
+          });
+          continue;
         }
 
-        // Validate medical branches for each staff member (if provided)
-        for (let j = 0; j < staff.length; j++) {
-          const staffMember = staff[j];
-          if (staffMember.medicalBranch && !MEDICAL_BRANCHES[staffMember.medicalBranch]) {
-            results.failed++;
-            results.errors.push({
-              row: rowNumber,
-              name: row['Name'] || 'N/A',
-              error: `Invalid medical branch "${staffMember.medicalBranch}" for staff member ${j + 1}`
-            });
-            continue;
-          }
+        let email = emailRaw || undefined;
+        if (email && !/^\S+@\S+\.\S+$/.test(email)) {
+          email = undefined;
         }
 
-        // If no staff provided, leave empty (can be added manually later)
-        if (!staff || staff.length === 0) {
-          staff = [];
+        const staff = parseStaffFromImportRow(norm);
+        const staffCheck = validateStaffForAccount(staff);
+        if (!staffCheck.ok) {
+          results.failed++;
+          results.errors.push({
+            row: rowNumber,
+            name: name || 'N/A',
+            error: staffCheck.message
+          });
+          continue;
         }
 
-        // Create account data
         const accountData = {
-          company: company,
-          name: row['Name'].trim(),
-          phone: row['Phone Number'].trim(),
-          email: row['Email'] ? row['Email'].trim() : undefined, // Optional email field
+          company: companyId,
+          name,
+          phone,
+          email,
           address: {
-            flatShopNo: row['Flat/Shop No.'].trim(),
-            building: row['Building'].trim(),
-            road: row['Road'].trim(),
-            block: row['Block'].trim(),
-            area: row['Area'].trim()
+            flatShopNo,
+            building,
+            road,
+            block,
+            area
           },
-          staff: staff, // Optional - can be empty array
-          vat: row['VAT Number'].trim(),
-          crNumber: row['CR Number'].trim(),
-          creditLimit: parseFloat(row['Credit Limit']) || 0,
-          isActive: row['Status']?.toLowerCase() !== 'inactive',
-          // Logo is optional - must be added manually on platform
+          staff,
+          vat,
+          crNumber,
+          creditLimit,
+          isActive: String(statusRaw).toLowerCase().trim() !== 'inactive',
           logo: {
             url: '',
             public_id: ''
           }
         };
 
-        // Check for duplicate name within company (strict company scope)
         const existingAccount = await Account.findOne(
-          buildCompanyQuery({ name: accountData.name }, company)
+          buildCompanyQuery({ name: accountData.name }, companyId)
         );
 
         if (existingAccount) {
@@ -801,16 +949,14 @@ const bulkImportAccounts = async (req, res) => {
           continue;
         }
 
-        // Create account
-        const account = await Account.create(accountData);
+        await Account.create(accountData);
         results.success++;
-
       } catch (error) {
         console.error(`Error processing row ${rowNumber}:`, error);
         results.failed++;
         results.errors.push({
           row: rowNumber,
-          name: row['Name'] || 'N/A',
+          name: getCell(rowToNorm(row), 'name') || 'N/A',
           error: error.message || 'Unknown error'
         });
       }
