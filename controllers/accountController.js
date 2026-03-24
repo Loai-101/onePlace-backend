@@ -204,17 +204,28 @@ function validateStaffForAccount(staff) {
   return { ok: true };
 }
 
+/** Match Excel headers despite BOM, extra spaces, and "Flat / Shop" vs "Flat/Shop". */
+function normalizeHeaderKey(key) {
+  return String(key ?? '')
+    .replace(/^\uFEFF/, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/\s*\/\s*/g, '/');
+}
+
 function rowToNorm(row) {
   const norm = {};
   for (const key of Object.keys(row)) {
-    norm[String(key).trim().toLowerCase()] = row[key];
+    norm[normalizeHeaderKey(key)] = row[key];
   }
   return norm;
 }
 
 function getCell(norm, ...aliases) {
   for (const a of aliases) {
-    const v = norm[a.trim().toLowerCase()];
+    const k = normalizeHeaderKey(a);
+    const v = norm[k];
     if (v !== undefined && v !== null && String(v).trim() !== '') {
       return String(v).trim();
     }
@@ -222,37 +233,86 @@ function getCell(norm, ...aliases) {
   return '';
 }
 
-/** Map one "Address" cell into schema fields (length limits per Account model). */
+/** Map one address line into schema fields (max lengths per Account model). */
 function distributeAddressLineIntoSchemaFields(addressLine) {
+  const empty = { flatShopNo: '', building: '', road: '', block: '' };
   const s = String(addressLine == null ? '' : addressLine).trim();
   if (!s) {
-    return { flatShopNo: '', building: '', road: '', block: '' };
+    return { ...empty };
   }
-  let i = 0;
-  const take = (max) => {
-    const part = s.slice(i, i + max).trim();
-    i += max;
-    return part;
-  };
+  const parts = s.split(',').map((p) => p.trim()).filter(Boolean);
+  if (parts.length === 0) {
+    return { ...empty };
+  }
+  if (parts.length === 1) {
+    return {
+      flatShopNo: parts[0].slice(0, 100),
+      building: '',
+      road: '',
+      block: ''
+    };
+  }
+  if (parts.length === 2) {
+    return {
+      flatShopNo: parts[0].slice(0, 100),
+      building: parts[1].slice(0, 200),
+      road: '',
+      block: ''
+    };
+  }
+  if (parts.length === 3) {
+    return {
+      flatShopNo: parts[0].slice(0, 100),
+      building: parts[1].slice(0, 200),
+      road: parts[2].slice(0, 200),
+      block: ''
+    };
+  }
   return {
-    flatShopNo: take(100),
-    building: take(200),
-    road: take(200),
-    block: take(50)
+    flatShopNo: parts[0].slice(0, 100),
+    building: parts[1].slice(0, 200),
+    road: parts[2].slice(0, 200),
+    block: parts.slice(3).join(', ').slice(0, 50)
   };
 }
 
 /**
- * Bulk import: read Address + Area + business fields only; staff/logo added later in the app.
+ * Bulk import: read Address (or legacy columns) + Area + business fields; staff/logo added later in the app.
  */
 function buildAddressFromImportRow(norm) {
-  let line = getCell(norm, 'address', 'street address', 'full address', 'location');
+  let line = getCell(
+    norm,
+    'address',
+    'street address',
+    'full address',
+    'location',
+    'addr',
+    'street',
+    'company address',
+    'physical address',
+    'address line 1',
+    'address line1',
+    'address 1'
+  );
   if (!line) {
     const legacy = [
-      getCell(norm, 'flat/shop no.', 'flat shop no.'),
-      getCell(norm, 'building'),
-      getCell(norm, 'road'),
-      getCell(norm, 'block')
+      getCell(
+        norm,
+        'flat/shop no.',
+        'flat shop no.',
+        'flat/shop no',
+        'flat shop no',
+        'shop no.',
+        'shop no',
+        'flat no',
+        'unit',
+        'unit no',
+        'unit no.',
+        'flat'
+      ),
+      getCell(norm, 'building', 'bldg', 'building name'),
+      getCell(norm, 'road', 'street name', 'st'),
+      getCell(norm, 'block', 'blk')
     ].filter(Boolean);
     if (legacy.length) line = legacy.join(', ');
   }
@@ -755,14 +815,12 @@ const bulkImportAccounts = async (req, res) => {
         const emailRaw = getCell(norm, 'email');
 
         const addressParts = buildAddressFromImportRow(norm);
-        const hasAddress =
-          !!(addressParts.flatShopNo || addressParts.building || addressParts.road || addressParts.block);
 
         const missingLabels = [];
         if (!name) missingLabels.push('Name');
         if (!phone) missingLabels.push('Phone Number');
         if (!area) missingLabels.push('Area');
-        if (!hasAddress) missingLabels.push('Address');
+        // Address is optional on import — admins can complete flat/building/road/block in the app
         if (!vat) missingLabels.push('VAT Number');
         if (!crNumber) missingLabels.push('CR Number');
         if (creditRaw === '') missingLabels.push('Credit Limit');
