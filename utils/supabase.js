@@ -1,11 +1,23 @@
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
-// Initialize Supabase client with service role key (for server-side operations)
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE
-);
+const supabaseUrl = (process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+const supabaseKey = (process.env.SUPABASE_SERVICE_ROLE || '').trim();
+
+if (!supabaseUrl || !supabaseKey) {
+  console.warn(
+    '[supabase] SUPABASE_URL or SUPABASE_SERVICE_ROLE is missing; storage uploads will fail until both are set on the host (e.g. Render).'
+  );
+} else if (!/^https:\/\//i.test(supabaseUrl)) {
+  console.warn('[supabase] SUPABASE_URL should be your project https://…supabase.co URL (no trailing slash).');
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
+  }
+});
 
 /**
  * Ensure storage bucket exists, create if it doesn't
@@ -162,6 +174,18 @@ const uploadFile = async (fileBuffer, fileName, bucket, folder = '', contentType
           `Failed to upload to bucket "${bucket}": ${msg}. ` + bucketHelpMessage(bucket)
         );
       }
+      if (/fetch failed/i.test(msg)) {
+        const cause = error.cause;
+        const causeBit =
+          cause && (cause.code || cause.message)
+            ? ` [${[cause.code, cause.message].filter(Boolean).join(' ')}]`
+            : '';
+        console.error('Supabase storage fetch failed (network/DNS):', msg, causeBit || '');
+        throw new Error(
+          `Supabase upload error: ${msg}${causeBit}. The API server could not reach Supabase. ` +
+            'Confirm SUPABASE_URL (https://…supabase.co) and SUPABASE_SERVICE_ROLE on Render, project not paused, and redeploy.'
+        );
+      }
       throw new Error(`Supabase upload error: ${msg}`);
     }
 
@@ -177,7 +201,11 @@ const uploadFile = async (fileBuffer, fileName, bucket, folder = '', contentType
     };
   } catch (error) {
     console.error('Supabase upload error:', error);
-    throw new Error(`Failed to upload file: ${error.message}`);
+    const msg = error.message || String(error);
+    if (/fetch failed/i.test(msg) && error.cause) {
+      console.error('Supabase upload error.cause:', error.cause);
+    }
+    throw new Error(`Failed to upload file: ${msg}`);
   }
 };
 

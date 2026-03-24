@@ -1,3 +1,9 @@
+// Prefer IPv4 for outbound connections — avoids "fetch failed" to Supabase when IPv6 routes fail (common on Render).
+const dns = require('dns');
+if (typeof dns.setDefaultResultOrder === 'function') {
+  dns.setDefaultResultOrder('ipv4first');
+}
+
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
