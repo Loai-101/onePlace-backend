@@ -207,6 +207,16 @@ const createCalendarEvent = async (req, res) => {
       description
     } = req.body;
 
+    // STRICT ISOLATION: User MUST have a company
+    if (!req.user || !req.user.company) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User must be associated with a company.'
+      });
+    }
+
+    const companyId = req.user.company._id || req.user.company;
+
     // Validate required fields
     if (!title || !type || !date) {
       return res.status(400).json({
@@ -244,14 +254,6 @@ const createCalendarEvent = async (req, res) => {
           });
         }
         // STRICT ISOLATION: Verify account belongs to user's company
-        if (!req.user || !req.user.company) {
-          return res.status(403).json({
-            success: false,
-            message: 'Access denied. User must be associated with a company.'
-          });
-        }
-
-        const companyId = req.user.company._id || req.user.company;
 
         if (accountDoc.company && accountDoc.company.toString() !== companyId.toString()) {
           return res.status(403).json({
