@@ -4,6 +4,12 @@ const CompanyUpdateRequest = require('../models/CompanyUpdateRequest');
 const bcrypt = require('bcryptjs');
 const emailService = require('../services/emailService');
 
+/** ObjectId or populated company doc -> id for queries (avoids CastError with plain objects) */
+function resolveCompanyId(company) {
+  if (company == null) return null;
+  if (typeof company === 'object' && company._id != null) return company._id;
+  return company;
+}
 
 // @desc    Get all companies
 // @route   GET /api/companies
@@ -736,7 +742,7 @@ const getMyCompany = async (req, res) => {
       });
     }
 
-    const company = await Company.findById(req.user.company);
+    const company = await Company.findById(resolveCompanyId(req.user.company));
 
     if (!company) {
       return res.status(404).json({
@@ -765,14 +771,14 @@ const getMyCompany = async (req, res) => {
 
     // Check for pending update requests
     const pendingRequest = await CompanyUpdateRequest.findOne({
-      company: req.user.company,
+      company: resolveCompanyId(req.user.company),
       status: 'pending'
     }).sort({ createdAt: -1 });
 
     // Check for recently approved requests (approved in the last 24 hours)
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const approvedRequest = await CompanyUpdateRequest.findOne({
-      company: req.user.company,
+      company: resolveCompanyId(req.user.company),
       status: 'approved',
       approvedAt: { $gte: oneDayAgo }
     }).sort({ approvedAt: -1 }).populate('approvedBy', 'name username');
@@ -827,7 +833,7 @@ const updateMyCompany = async (req, res) => {
       });
     }
 
-    const company = await Company.findById(req.user.company);
+    const company = await Company.findById(resolveCompanyId(req.user.company));
 
     if (!company) {
       return res.status(404).json({
@@ -838,7 +844,7 @@ const updateMyCompany = async (req, res) => {
 
     // Create update request instead of directly updating
     const updateRequest = await CompanyUpdateRequest.create({
-      company: req.user.company,
+      company: resolveCompanyId(req.user.company),
       requestedBy: req.user.id,
       requestedChanges: req.body,
       status: 'pending'
@@ -906,7 +912,7 @@ const getCompanyModules = async (req, res) => {
       });
     }
 
-    const company = await Company.findById(req.user.company);
+    const company = await Company.findById(resolveCompanyId(req.user.company));
 
     if (!company) {
       return res.status(404).json({
@@ -951,7 +957,7 @@ const updateCompanyModules = async (req, res) => {
       });
     }
 
-    const company = await Company.findById(req.user.company);
+    const company = await Company.findById(resolveCompanyId(req.user.company));
 
     if (!company) {
       return res.status(404).json({
