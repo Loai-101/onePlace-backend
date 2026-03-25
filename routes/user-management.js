@@ -23,19 +23,19 @@ router.route('/')
   .get(getCompanyUsers)
   .post(createUser);
 
-router.route('/:id')
-  .get(getUserDetails)
-  .patch(updateUser)
-  .delete(deleteUser);
+// Static paths must be registered before /:id so they are not captured as ids
+router.get('/password-reset-requests', getPasswordResetRequests);
+router.put('/password-reset-requests/:id/complete', completePasswordResetRequest);
+router.put('/password-reset-requests/:id/reject', rejectPasswordResetRequest);
 
 router.patch('/:id/toggle-status', toggleUserStatus);
 router.post('/:id/reset-password', resetUserPassword);
 router.post('/:id/forecast', updateSalesmanForecast);
 
-// Password reset request routes
-router.get('/password-reset-requests', getPasswordResetRequests);
-router.put('/password-reset-requests/:id/complete', completePasswordResetRequest);
-router.put('/password-reset-requests/:id/reject', rejectPasswordResetRequest);
+router.route('/:id')
+  .get(getUserDetails)
+  .patch(updateUser)
+  .delete(deleteUser);
 
 module.exports = router;
 

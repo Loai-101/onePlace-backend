@@ -3,6 +3,31 @@ const Company = require('../models/Company');
 const PasswordResetRequest = require('../models/PasswordResetRequest');
 const emailService = require('../services/emailService');
 
+function normalizeUserId(value) {
+  if (value == null) return '';
+  if (typeof value === 'object' && value._id != null) return String(value._id);
+  return String(value);
+}
+
+/** Resolves company id from ObjectId, populated ref, or embedded id */
+function companyIdString(companyRef) {
+  if (companyRef == null) return null;
+  if (typeof companyRef === 'object' && companyRef._id != null) {
+    return companyRef._id.toString();
+  }
+  try {
+    return companyRef.toString();
+  } catch {
+    return null;
+  }
+}
+
+function sameCompany(usersCompanyRef, requestersCompanyRef) {
+  const a = companyIdString(usersCompanyRef);
+  const b = companyIdString(requestersCompanyRef);
+  return Boolean(a && b && a === b);
+}
+
 // @desc    Get all users for the logged-in owner's company
 // @route   GET /api/user-management
 // @access  Private (Owner/Admin)
@@ -61,10 +86,7 @@ const getUserDetails = async (req, res) => {
 
     // Check if the requesting user has access to this user
     const requestingUser = await User.findById(req.user.id);
-    const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
-    const requestingUserCompanyId = requestingUser.company.toString();
-    
-    if (userCompanyId !== requestingUserCompanyId) {
+    if (!sameCompany(user.company, requestingUser.company)) {
       return res.status(403).json({
         success: false,
         message: 'You do not have permission to view this user'
@@ -236,10 +258,7 @@ const updateUser = async (req, res) => {
 
     // Check if the requesting user has access to update this user
     const requestingUser = await User.findById(req.user.id);
-    const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
-    const requestingUserCompanyId = requestingUser.company.toString();
-    
-    if (userCompanyId !== requestingUserCompanyId) {
+    if (!sameCompany(user.company, requestingUser.company)) {
       return res.status(403).json({
         success: false,
         message: 'You do not have permission to update this user'
@@ -301,7 +320,7 @@ const toggleUserStatus = async (req, res) => {
     const userId = req.params.id;
     
     // Prevent users from deactivating themselves
-    if (req.user.id === userId) {
+    if (normalizeUserId(req.user._id) === normalizeUserId(userId)) {
       return res.status(400).json({
         success: false,
         message: 'You cannot deactivate your own account'
@@ -319,18 +338,16 @@ const toggleUserStatus = async (req, res) => {
 
     // Check if the requesting user has access
     const requestingUser = await User.findById(req.user.id);
-    const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
-    const requestingUserCompanyId = requestingUser.company.toString();
-    
-    if (userCompanyId !== requestingUserCompanyId) {
+    if (!sameCompany(user.company, requestingUser.company)) {
       return res.status(403).json({
         success: false,
         message: 'You do not have permission to update this user'
       });
     }
 
-    // Toggle status
-    user.isActive = !user.isActive;
+    // Toggle status (treat missing/undefined as active so first toggle deactivates)
+    const currentlyActive = user.isActive !== false;
+    user.isActive = !currentlyActive;
     await user.save();
 
     const updatedUser = await User.findById(userId).select('-password');
@@ -375,10 +392,7 @@ const resetUserPassword = async (req, res) => {
 
     // Check if the requesting user has access
     const requestingUser = await User.findById(req.user.id);
-    const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
-    const requestingUserCompanyId = requestingUser.company.toString();
-    
-    if (userCompanyId !== requestingUserCompanyId) {
+    if (!sameCompany(user.company, requestingUser.company)) {
       return res.status(403).json({
         success: false,
         message: 'You do not have permission to reset this user\'s password'
@@ -425,7 +439,7 @@ const deleteUser = async (req, res) => {
     const userId = req.params.id;
     
     // Prevent users from deleting themselves
-    if (req.user.id === userId) {
+    if (normalizeUserId(req.user._id) === normalizeUserId(userId)) {
       return res.status(400).json({
         success: false,
         message: 'You cannot delete your own account'
@@ -443,10 +457,7 @@ const deleteUser = async (req, res) => {
 
     // Check if the requesting user has access
     const requestingUser = await User.findById(req.user.id);
-    const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
-    const requestingUserCompanyId = requestingUser.company.toString();
-    
-    if (userCompanyId !== requestingUserCompanyId) {
+    if (!sameCompany(user.company, requestingUser.company)) {
       return res.status(403).json({
         success: false,
         message: 'You do not have permission to delete this user'
@@ -643,10 +654,7 @@ const completePasswordResetRequest = async (req, res) => {
 
     // Check if requesting user has access (same company)
     const requestingUser = await User.findById(req.user.id);
-    const userCompanyId = request.user.company._id ? request.user.company._id.toString() : request.user.company.toString();
-    const requestingUserCompanyId = requestingUser.company.toString();
-
-    if (userCompanyId !== requestingUserCompanyId) {
+    if (!sameCompany(request.user.company, requestingUser.company)) {
       return res.status(403).json({
         success: false,
         message: 'You do not have permission to complete this request'
@@ -723,10 +731,7 @@ const rejectPasswordResetRequest = async (req, res) => {
 
     // Check if requesting user has access (same company)
     const requestingUser = await User.findById(req.user.id);
-    const userCompanyId = request.user.company._id ? request.user.company._id.toString() : request.user.company.toString();
-    const requestingUserCompanyId = requestingUser.company.toString();
-
-    if (userCompanyId !== requestingUserCompanyId) {
+    if (!sameCompany(request.user.company, requestingUser.company)) {
       return res.status(403).json({
         success: false,
         message: 'You do not have permission to reject this request'
