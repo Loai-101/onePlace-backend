@@ -1,11 +1,17 @@
 const UserActivity = require('../models/UserActivity')
 const User = require('../models/User')
 
+function resolveObjectId(value) {
+  if (value == null) return null
+  if (typeof value === 'object' && value._id != null) return value._id
+  return value
+}
+
 // Track user login
 exports.trackLogin = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id
-    const companyId = req.user.company
+    const companyId = resolveObjectId(req.user.company)
     
     // Get IP address and user agent
     const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress
@@ -39,7 +45,9 @@ exports.trackLogin = async (req, res) => {
 exports.trackPageVisit = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id
-    const { page, duration } = req.body
+    const page = typeof req.body?.page === 'string' ? req.body.page.trim() : ''
+    const parsedDuration = Number(req.body?.duration)
+    const duration = Number.isFinite(parsedDuration) && parsedDuration >= 0 ? parsedDuration : 0
     
     if (!userId) {
       return res.status(401).json({
@@ -63,7 +71,7 @@ exports.trackPageVisit = async (req, res) => {
     
     if (!activeSession) {
       // If no active session, create a new one (user might have refreshed)
-      const companyId = req.user.company
+      const companyId = resolveObjectId(req.user.company)
       
       if (!companyId) {
         return res.status(400).json({
@@ -105,31 +113,28 @@ exports.trackPageVisit = async (req, res) => {
     if (existingPage) {
       // Update the existing page entry with new visit time and duration
       existingPage.visitedAt = new Date()
-      existingPage.duration = (existingPage.duration || 0) + (duration || 0)
+      existingPage.duration = (existingPage.duration || 0) + duration
     } else {
       // Add new page to existing session
       activeSession.pages.push({
         page,
         visitedAt: new Date(),
-        duration: duration || 0
+        duration
       })
     }
     
     // Mark as modified to ensure Mongoose saves the changes to the pages array
     activeSession.markModified('pages')
     
-    // Save and verify
+    // Save updated activity
     const savedActivity = await activeSession.save()
-    
-    // Verify pages were saved
-    const verifyActivity = await UserActivity.findById(savedActivity._id)
-    console.log(`✅ Page visit tracked: User ${userId}, Page: ${page}, Total pages: ${verifyActivity.pages.length}`)
-    console.log(`📄 Pages in database:`, verifyActivity.pages.map(p => p.page).join(', '))
+    const totalPages = Array.isArray(savedActivity.pages) ? savedActivity.pages.length : 0
+    console.log(`✅ Page visit tracked: User ${userId}, Page: ${page}, Total pages: ${totalPages}`)
     
     res.json({
       success: true,
       data: savedActivity,
-      message: `Page visit tracked. Total pages: ${verifyActivity.pages.length}`
+      message: `Page visit tracked. Total pages: ${totalPages}`
     })
   } catch (error) {
     console.error('Error tracking page visit:', error)
